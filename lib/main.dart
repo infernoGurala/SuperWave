@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 import 'moving_flow_background.dart';
 import 'glass_sidebar.dart';
 
@@ -21,20 +20,21 @@ class SuperWaveApp extends StatelessWidget {
       ),
       home: Scaffold(
         backgroundColor: Colors.white,
-        body: LiquidGlassView(
-          backgroundWidget: const MovingFlowBackground(),
-          child: const SafeArea(
-            child: Align(
-              alignment: Alignment.centerLeft,
-              child: GlassSidebar(),
+        body: Stack(
+          fit: StackFit.expand,
+          children: [
+            // Background layer — the glass will blur/refract this
+            const MovingFlowBackground(),
+            // Glass sidebar floating on top
+            const SafeArea(
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: GlassSidebar(),
+              ),
             ),
-          ),
+          ],
         ),
       ),
     );
   }
 }
-
-
-
-

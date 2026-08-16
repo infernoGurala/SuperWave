@@ -49,9 +49,6 @@ class _GlassSidebarState extends State<GlassSidebar> {
       ),
       // ── The one true glass surface ──
       child: LiquidGlassLens(
-        touch: const LiquidGlassTouch(
-          flex: LiquidGlassFlex.subtle(),
-        ),
         style: const LiquidGlassStyle(
           shape: LiquidGlassShape.continuousRoundedRectangle(
             cornerRadius: 30,

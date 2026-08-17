@@ -2,9 +2,52 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
+import 'package:markdown/markdown.dart' as md;
 import 'package:path/path.dart' as p;
 import 'settings_screen.dart';
 import 'theme/claude_theme.dart';
+import 'theme/style_config_manager.dart';
+
+class _HighlightSyntax extends md.InlineSyntax {
+  _HighlightSyntax() : super(r'==([^=\n]+)==');
+
+  @override
+  bool onMatch(md.InlineParser parser, Match match) {
+    final rawText = match[1] ?? '';
+    parser.addNode(md.Element.text('mark', rawText));
+    return true;
+  }
+}
+
+class _HighlightBuilder extends MarkdownElementBuilder {
+  @override
+  Widget? visitElementAfter(
+    md.Element element,
+    TextStyle? preferredStyle,
+  ) {
+    final highlightColor = ClaudeTheme.renderColors.highlight;
+    final baseStyle = preferredStyle ?? const TextStyle();
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+      decoration: BoxDecoration(
+        color: highlightColor.withValues(alpha: 0.22),
+        borderRadius: BorderRadius.circular(4),
+        border: Border.all(
+          color: highlightColor.withValues(alpha: 0.40),
+          width: 0.8,
+        ),
+      ),
+      child: Text(
+        element.textContent,
+        style: baseStyle.copyWith(
+          color: highlightColor,
+          fontWeight: FontWeight.w600,
+        ),
+      ),
+    );
+  }
+}
 
 /// Full-screen / Artifact-style Markdown Note Viewer matching Claude Desktop.
 /// Focuses on calm typography, high legibility, reading stats, and clean actions.
@@ -13,6 +56,7 @@ class NoteViewerScreen extends StatefulWidget {
   final String? vaultPath;
   final AppShortcut? parentFolderShortcut;
   final AppShortcut? homeRootShortcut;
+  final ValueChanged<AppThemeId>? onThemeChanged;
 
   const NoteViewerScreen({
     super.key,
@@ -20,6 +64,7 @@ class NoteViewerScreen extends StatefulWidget {
     this.vaultPath,
     this.parentFolderShortcut,
     this.homeRootShortcut,
+    this.onThemeChanged,
   });
 
   @override
@@ -138,82 +183,99 @@ class _NoteViewerScreenState extends State<NoteViewerScreen> {
   }
 
   MarkdownStyleSheet _buildClaudeStyleSheet() {
+    final colors = ClaudeTheme.renderColors;
+    final noteFont = ClaudeTheme.notesFont;
+    final headingsFont = ClaudeTheme.headingsFont;
+    final monoFont = ClaudeTheme.monospaceFont;
+
     return MarkdownStyleSheet(
       p: TextStyle(
+        fontFamily: noteFont,
         fontSize: 15,
         height: 1.7,
         color: ClaudeTheme.textPrimary,
       ),
       h1: TextStyle(
+        fontFamily: headingsFont,
         fontSize: 26,
         fontWeight: FontWeight.w700,
         letterSpacing: -0.6,
-        color: ClaudeTheme.textPrimary,
+        color: colors.h1,
       ),
       h1Padding: const EdgeInsets.only(top: 24, bottom: 10),
       h2: TextStyle(
+        fontFamily: headingsFont,
         fontSize: 20,
         fontWeight: FontWeight.w700,
         letterSpacing: -0.4,
-        color: ClaudeTheme.accent,
+        color: colors.h2,
       ),
       h2Padding: const EdgeInsets.only(top: 20, bottom: 8),
       h3: TextStyle(
+        fontFamily: headingsFont,
         fontSize: 17,
         fontWeight: FontWeight.w600,
         letterSpacing: -0.2,
-        color: ClaudeTheme.amber,
+        color: colors.h3,
       ),
       h3Padding: const EdgeInsets.only(top: 16, bottom: 6),
       h4: TextStyle(
+        fontFamily: headingsFont,
         fontSize: 15,
         fontWeight: FontWeight.w600,
-        color: ClaudeTheme.textPrimary,
+        color: colors.h4,
       ),
       h5: TextStyle(
+        fontFamily: headingsFont,
         fontSize: 14,
         fontWeight: FontWeight.w600,
-        color: ClaudeTheme.textSecondary,
+        color: colors.h5,
       ),
       h6: TextStyle(
+        fontFamily: headingsFont,
         fontSize: 13,
         fontWeight: FontWeight.w600,
-        color: ClaudeTheme.textTertiary,
+        color: colors.h6,
       ),
-      strong: const TextStyle(
+      strong: TextStyle(
+        fontFamily: noteFont,
         fontWeight: FontWeight.w700,
-        color: Colors.white,
+        color: colors.bold,
       ),
       em: TextStyle(
+        fontFamily: noteFont,
         fontStyle: FontStyle.italic,
-        color: ClaudeTheme.amber,
+        color: colors.italic,
       ),
       del: TextStyle(
-        color: ClaudeTheme.textTertiary,
+        fontFamily: noteFont,
+        color: colors.strikethrough,
         decoration: TextDecoration.lineThrough,
       ),
       a: TextStyle(
-        color: ClaudeTheme.accent,
+        fontFamily: noteFont,
+        color: colors.link,
         decoration: TextDecoration.underline,
-        decorationColor: ClaudeTheme.accent,
+        decorationColor: colors.link,
       ),
       code: TextStyle(
-        fontFamily: 'Consolas',
+        fontFamily: monoFont,
         fontSize: 13,
-        color: ClaudeTheme.accentHover,
-        backgroundColor: ClaudeTheme.bgCode,
+        color: colors.inlineCode,
+        backgroundColor: colors.codeBlockBg,
       ),
       codeblockDecoration: BoxDecoration(
-        color: ClaudeTheme.bgCode,
+        color: colors.codeBlockBg,
         borderRadius: BorderRadius.circular(8),
         border: Border.all(color: ClaudeTheme.border, width: 1),
       ),
       codeblockPadding: const EdgeInsets.all(16),
       blockquote: TextStyle(
+        fontFamily: noteFont,
         fontSize: 14.5,
         fontStyle: FontStyle.italic,
         height: 1.6,
-        color: ClaudeTheme.textSecondary,
+        color: colors.blockquoteText,
       ),
       blockquoteDecoration: BoxDecoration(
         color: ClaudeTheme.bgCard,
@@ -222,25 +284,28 @@ class _NoteViewerScreenState extends State<NoteViewerScreen> {
           bottomRight: Radius.circular(8),
         ),
         border: Border(
-          left: BorderSide(color: ClaudeTheme.accent, width: 3),
+          left: BorderSide(color: colors.blockquoteBorder, width: 3),
         ),
       ),
       blockquotePadding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
       listBullet: TextStyle(
+        fontFamily: noteFont,
         fontSize: 15,
-        color: ClaudeTheme.accent,
+        color: colors.listBullet,
         fontWeight: FontWeight.w700,
       ),
       listBulletPadding: const EdgeInsets.only(right: 10),
       listIndent: 22,
       tableHead: TextStyle(
+        fontFamily: headingsFont,
         fontSize: 13.5,
         fontWeight: FontWeight.w700,
-        color: ClaudeTheme.textPrimary,
+        color: colors.tableHeader,
       ),
       tableBody: TextStyle(
+        fontFamily: noteFont,
         fontSize: 13.5,
-        color: ClaudeTheme.textSecondary,
+        color: colors.tableBody,
       ),
       tableBorder: TableBorder.all(
         color: ClaudeTheme.border,
@@ -403,8 +468,12 @@ class _NoteViewerScreenState extends State<NoteViewerScreen> {
                         Icons.schedule_rounded,
                         '$readingTime min read',
                       ),
-                      const SizedBox(width: 12),
+                      const SizedBox(width: 8),
                     ],
+
+                    // Color Style & Theme Selector Button
+                    _buildStyleSelectorButton(),
+                    const SizedBox(width: 8),
 
                     // Copy Action
                     OutlinedButton.icon(
@@ -443,6 +512,93 @@ class _NoteViewerScreenState extends State<NoteViewerScreen> {
           ),
         ),
       ),
+    );
+  }
+
+  Widget _buildStyleSelectorButton() {
+    return Tooltip(
+      message: 'Customize Theme & Render Colors',
+      child: OutlinedButton.icon(
+        style: OutlinedButton.styleFrom(
+          foregroundColor: ClaudeTheme.textPrimary,
+          side: BorderSide(
+            color: ClaudeTheme.border,
+          ),
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(8),
+          ),
+        ),
+        onPressed: () => _showColorStyleSelectorDialog(context),
+        icon: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 8,
+              height: 8,
+              decoration: BoxDecoration(
+                color: ClaudeTheme.accent,
+                shape: BoxShape.circle,
+                boxShadow: [
+                  BoxShadow(
+                    color: ClaudeTheme.accent.withValues(alpha: 0.6),
+                    blurRadius: 4,
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 6),
+            Icon(
+              Icons.palette_outlined,
+              size: 14,
+              color: ClaudeTheme.textSecondary,
+            ),
+          ],
+        ),
+        label: const Text(
+          'Style',
+          style: TextStyle(fontSize: 12),
+        ),
+      ),
+    );
+  }
+
+  void _showColorStyleSelectorDialog(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (dialogContext) {
+        return _RenderStyleSelectorModal(
+          vaultPath: widget.vaultPath,
+          onThemeSelected: (themeId) {
+            ClaudeTheme.setTheme(themeId);
+            if (widget.vaultPath != null) {
+              StyleConfigManager.saveThemeConfig(widget.vaultPath!, themeId);
+            }
+            widget.onThemeChanged?.call(themeId);
+            setState(() {});
+          },
+          onRenderPresetSelected: (preset) {
+            ClaudeTheme.setAllRenderOverrides(preset.overrides);
+            if (widget.vaultPath != null) {
+              StyleConfigManager.saveRenderConfig(
+                widget.vaultPath!,
+                ClaudeTheme.renderOverrides,
+              );
+            }
+            setState(() {});
+          },
+          onResetRenderStyles: () {
+            ClaudeTheme.resetAllRenderOverrides();
+            if (widget.vaultPath != null) {
+              StyleConfigManager.saveRenderConfig(
+                widget.vaultPath!,
+                ClaudeTheme.renderOverrides,
+              );
+            }
+            setState(() {});
+          },
+        );
+      },
     );
   }
 
@@ -485,15 +641,59 @@ class _NoteViewerScreenState extends State<NoteViewerScreen> {
       );
     }
 
+    final noteTitle = p.basenameWithoutExtension(widget.filePath);
+
     return SingleChildScrollView(
       padding: const EdgeInsets.fromLTRB(48, 36, 48, 64),
       child: Center(
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 780),
-          child: MarkdownBody(
-            data: _content!,
-            selectable: true,
-            styleSheet: _buildClaudeStyleSheet(),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // ── Prominent Big Note Title ──
+              SelectableText(
+                noteTitle,
+                style: TextStyle(
+                  fontSize: 32,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: -0.8,
+                  height: 1.25,
+                  color: ClaudeTheme.renderColors.h1,
+                ),
+              ),
+              const SizedBox(height: 14),
+
+              // ── Stylish Accent Divider Line ──
+              Container(
+                width: double.infinity,
+                height: 1.5,
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    colors: [
+                      ClaudeTheme.accent.withValues(alpha: 0.65),
+                      ClaudeTheme.border.withValues(alpha: 0.6),
+                      ClaudeTheme.border.withValues(alpha: 0.1),
+                    ],
+                    stops: const [0.0, 0.45, 1.0],
+                  ),
+                ),
+              ),
+              const SizedBox(height: 28),
+
+              // ── Rendered Markdown Content ──
+              MarkdownBody(
+                data: _content!,
+                selectable: true,
+                styleSheet: _buildClaudeStyleSheet(),
+                inlineSyntaxes: [
+                  _HighlightSyntax(),
+                ],
+                builders: {
+                  'mark': _HighlightBuilder(),
+                },
+              ),
+            ],
           ),
         ),
       ),
@@ -616,6 +816,692 @@ class _ViewerBreadcrumbSegmentState extends State<_ViewerBreadcrumbSegment> {
                 ],
               ),
             ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _RenderColorPreset {
+  final String name;
+  final String description;
+  final Color primary;
+  final Color secondary;
+  final Map<String, int> overrides;
+
+  const _RenderColorPreset({
+    required this.name,
+    required this.description,
+    required this.primary,
+    required this.secondary,
+    required this.overrides,
+  });
+
+  static const List<_RenderColorPreset> presets = [
+    _RenderColorPreset(
+      name: 'Terracotta Amber',
+      description: 'Warm terracotta headings, glowing amber highlights and links',
+      primary: Color(0xFFD97757),
+      secondary: Color(0xFFD49B55),
+      overrides: {
+        'h1': 0xFFECEBE6,
+        'h2': 0xFFD97757,
+        'h3': 0xFFD49B55,
+        'bold': 0xFFECEBE6,
+        'italic': 0xFFD49B55,
+        'link': 0xFFD97757,
+        'highlight': 0xFFD49B55,
+        'inlineCode': 0xFFE58B6D,
+        'blockquoteBorder': 0xFFD97757,
+        'listBullet': 0xFFD97757,
+      },
+    ),
+    _RenderColorPreset(
+      name: 'Obsidian Amethyst',
+      description: 'Luminous lavender headers, vibrant purple highlights and violet accents',
+      primary: Color(0xFFA78BFA),
+      secondary: Color(0xFFC084FC),
+      overrides: {
+        'h1': 0xFFF5F3FF,
+        'h2': 0xFFA78BFA,
+        'h3': 0xFFC084FC,
+        'bold': 0xFFFFFFFF,
+        'italic': 0xFFC084FC,
+        'link': 0xFFA78BFA,
+        'highlight': 0xFFA855F7,
+        'inlineCode': 0xFFC4B5FD,
+        'blockquoteBorder': 0xFF8B5CF6,
+        'listBullet': 0xFFA78BFA,
+      },
+    ),
+    _RenderColorPreset(
+      name: 'Forest Emerald',
+      description: 'Calm jade emerald headings, soft sage highlights and mint links',
+      primary: Color(0xFF34D399),
+      secondary: Color(0xFFA7F3D0),
+      overrides: {
+        'h1': 0xFFECFDF5,
+        'h2': 0xFF34D399,
+        'h3': 0xFF6EE7B7,
+        'bold': 0xFFF0FDF4,
+        'italic': 0xFFA7F3D0,
+        'link': 0xFF10B981,
+        'highlight': 0xFF34D399,
+        'inlineCode': 0xFF6EE7B7,
+        'blockquoteBorder': 0xFF10B981,
+        'listBullet': 0xFF34D399,
+      },
+    ),
+    _RenderColorPreset(
+      name: 'Nordic Frost Sky',
+      description: 'Crisp glacial sky blue headings with cyan highlights and cool accents',
+      primary: Color(0xFF38BDF8),
+      secondary: Color(0xFF7DD3FC),
+      overrides: {
+        'h1': 0xFFF0F9FF,
+        'h2': 0xFF38BDF8,
+        'h3': 0xFF7DD3FC,
+        'bold': 0xFFF8FAFC,
+        'italic': 0xFFBAE6FD,
+        'link': 0xFF0284C7,
+        'highlight': 0xFF38BDF8,
+        'inlineCode': 0xFF7DD3FC,
+        'blockquoteBorder': 0xFF0EA5E9,
+        'listBullet': 0xFF38BDF8,
+      },
+    ),
+    _RenderColorPreset(
+      name: 'Sunset Gold',
+      description: 'Radiant amber gold headings with bright ochre accents and warm tones',
+      primary: Color(0xFFF59E0B),
+      secondary: Color(0xFFFDE68A),
+      overrides: {
+        'h1': 0xFFFFFBEB,
+        'h2': 0xFFF59E0B,
+        'h3': 0xFFFBBF24,
+        'bold': 0xFFFEF3C7,
+        'italic': 0xFFFDE68A,
+        'link': 0xFFD97706,
+        'highlight': 0xFFF59E0B,
+        'inlineCode': 0xFFFBBF24,
+        'blockquoteBorder': 0xFFD97706,
+        'listBullet': 0xFFF59E0B,
+      },
+    ),
+    _RenderColorPreset(
+      name: 'Rose Coral',
+      description: 'Vivid ruby coral headings, pastel pink highlights and bold accents',
+      primary: Color(0xFFFB7185),
+      secondary: Color(0xFFFDA4AF),
+      overrides: {
+        'h1': 0xFFFFF1F2,
+        'h2': 0xFFFB7185,
+        'h3': 0xFFFDA4AF,
+        'bold': 0xFFFFE4E6,
+        'italic': 0xFFFECDD3,
+        'link': 0xFFE11D48,
+        'highlight': 0xFFF43F5E,
+        'inlineCode': 0xFFFDA4AF,
+        'blockquoteBorder': 0xFFBE123C,
+        'listBullet': 0xFFFB7185,
+      },
+    ),
+    _RenderColorPreset(
+      name: 'Monochrome Minimal',
+      description: 'High-contrast clean white and slate gray palette for distraction-free reading',
+      primary: Color(0xFFFFFFFF),
+      secondary: Color(0xFF94A3B8),
+      overrides: {
+        'h1': 0xFFFFFFFF,
+        'h2': 0xFFE2E8F0,
+        'h3': 0xFFCBD5E1,
+        'bold': 0xFFFFFFFF,
+        'italic': 0xFF94A3B8,
+        'link': 0xFFE2E8F0,
+        'highlight': 0xFFCBD5E1,
+        'inlineCode': 0xFFE2E8F0,
+        'blockquoteBorder': 0xFF64748B,
+        'listBullet': 0xFFE2E8F0,
+      },
+    ),
+  ];
+}
+
+class _RenderStyleSelectorModal extends StatefulWidget {
+  final String? vaultPath;
+  final ValueChanged<AppThemeId> onThemeSelected;
+  final ValueChanged<_RenderColorPreset> onRenderPresetSelected;
+  final VoidCallback onResetRenderStyles;
+
+  const _RenderStyleSelectorModal({
+    required this.vaultPath,
+    required this.onThemeSelected,
+    required this.onRenderPresetSelected,
+    required this.onResetRenderStyles,
+  });
+
+  @override
+  State<_RenderStyleSelectorModal> createState() => _RenderStyleSelectorModalState();
+}
+
+class _RenderStyleSelectorModalState extends State<_RenderStyleSelectorModal> {
+  int _activeTabIndex = 0; // 0 = Themes, 1 = Markdown Styles
+
+  @override
+  Widget build(BuildContext context) {
+    final currentTheme = ClaudeTheme.current;
+
+    return Dialog(
+      backgroundColor: Colors.transparent,
+      insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 32),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 620, maxHeight: 660),
+        child: Container(
+          decoration: BoxDecoration(
+            color: ClaudeTheme.bgSurface,
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: ClaudeTheme.borderHover, width: 1),
+            boxShadow: ClaudeTheme.popupShadow,
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // ── Header ──
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 18, 16, 14),
+                child: Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: ClaudeTheme.accent.withValues(alpha: 0.14),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Icon(
+                        Icons.palette_outlined,
+                        size: 20,
+                        color: ClaudeTheme.accent,
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Color Style & Themes',
+                            style: TextStyle(
+                              fontSize: 17,
+                              fontWeight: FontWeight.w700,
+                              color: ClaudeTheme.textPrimary,
+                            ),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            'Customize document theme and Markdown element render colors.',
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: ClaudeTheme.textSecondary,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    IconButton(
+                      tooltip: 'Close',
+                      icon: Icon(
+                        Icons.close_rounded,
+                        size: 20,
+                        color: ClaudeTheme.textSecondary,
+                      ),
+                      onPressed: () => Navigator.of(context).pop(),
+                    ),
+                  ],
+                ),
+              ),
+
+              // ── Segmented Tab Switcher ──
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 20),
+                child: Container(
+                  padding: const EdgeInsets.all(3),
+                  decoration: BoxDecoration(
+                    color: ClaudeTheme.bgCard,
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: ClaudeTheme.border, width: 1),
+                  ),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: _buildTabButton(
+                          title: 'App Themes',
+                          icon: Icons.auto_awesome_rounded,
+                          index: 0,
+                        ),
+                      ),
+                      const SizedBox(width: 4),
+                      Expanded(
+                        child: _buildTabButton(
+                          title: 'Markdown Colors',
+                          icon: Icons.brush_outlined,
+                          index: 1,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(height: 14),
+
+              // ── Scrollable Tab Content ──
+              Flexible(
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 6),
+                  child: _activeTabIndex == 0
+                      ? _buildThemesList(currentTheme)
+                      : _buildRenderPresetsList(),
+                ),
+              ),
+
+              // ── Bottom Action Footer ──
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                decoration: BoxDecoration(
+                  color: ClaudeTheme.bgSidebar,
+                  borderRadius: const BorderRadius.vertical(bottom: Radius.circular(16)),
+                  border: Border(
+                    top: BorderSide(color: ClaudeTheme.border, width: 1),
+                  ),
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    if (_activeTabIndex == 1)
+                      TextButton.icon(
+                        style: TextButton.styleFrom(
+                          foregroundColor: ClaudeTheme.textTertiary,
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                        ),
+                        onPressed: () {
+                          widget.onResetRenderStyles();
+                          setState(() {});
+                        },
+                        icon: const Icon(Icons.refresh_rounded, size: 14),
+                        label: const Text(
+                          'Reset to Theme Defaults',
+                          style: TextStyle(fontSize: 12),
+                        ),
+                      )
+                    else
+                      Text(
+                        'Changes apply live to note canvas',
+                        style: TextStyle(
+                          fontSize: 11.5,
+                          color: ClaudeTheme.textTertiary,
+                        ),
+                      ),
+                    FilledButton(
+                      style: FilledButton.styleFrom(
+                        backgroundColor: ClaudeTheme.accent,
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 8),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                      ),
+                      onPressed: () => Navigator.of(context).pop(),
+                      child: const Text('Done', style: TextStyle(fontSize: 12.5)),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildTabButton({
+    required String title,
+    required IconData icon,
+    required int index,
+  }) {
+    final isSelected = _activeTabIndex == index;
+    return InkWell(
+      borderRadius: BorderRadius.circular(7),
+      onTap: () => setState(() => _activeTabIndex = index),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 150),
+        padding: const EdgeInsets.symmetric(vertical: 8),
+        decoration: BoxDecoration(
+          color: isSelected ? ClaudeTheme.accent.withValues(alpha: 0.18) : Colors.transparent,
+          borderRadius: BorderRadius.circular(7),
+          border: Border.all(
+            color: isSelected ? ClaudeTheme.accent.withValues(alpha: 0.5) : Colors.transparent,
+            width: 1,
+          ),
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              icon,
+              size: 15,
+              color: isSelected ? ClaudeTheme.accent : ClaudeTheme.textSecondary,
+            ),
+            const SizedBox(width: 6),
+            Text(
+              title,
+              style: TextStyle(
+                fontSize: 12.5,
+                fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
+                color: isSelected ? ClaudeTheme.textPrimary : ClaudeTheme.textSecondary,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildThemesList(AppThemeData currentTheme) {
+    return Column(
+      children: [
+        for (final theme in AppThemeData.allThemes) ...[
+          _ViewerThemeCard(
+            theme: theme,
+            isSelected: currentTheme.id == theme.id,
+            onSelect: () {
+              widget.onThemeSelected(theme.id);
+              setState(() {});
+            },
+          ),
+          const SizedBox(height: 8),
+        ],
+      ],
+    );
+  }
+
+  Widget _buildRenderPresetsList() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.only(bottom: 8),
+          child: Text(
+            'SELECT A RENDER PALETTE PRESET',
+            style: TextStyle(
+              fontSize: 10.5,
+              fontWeight: FontWeight.w700,
+              letterSpacing: 0.8,
+              color: ClaudeTheme.textTertiary,
+            ),
+          ),
+        ),
+        for (final preset in _RenderColorPreset.presets) ...[
+          _ViewerPresetCard(
+            preset: preset,
+            onSelect: () {
+              widget.onRenderPresetSelected(preset);
+              setState(() {});
+            },
+          ),
+          const SizedBox(height: 8),
+        ],
+      ],
+    );
+  }
+}
+
+class _ViewerThemeCard extends StatefulWidget {
+  final AppThemeData theme;
+  final bool isSelected;
+  final VoidCallback onSelect;
+
+  const _ViewerThemeCard({
+    required this.theme,
+    required this.isSelected,
+    required this.onSelect,
+  });
+
+  @override
+  State<_ViewerThemeCard> createState() => _ViewerThemeCardState();
+}
+
+class _ViewerThemeCardState extends State<_ViewerThemeCard> {
+  bool _isHovered = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return MouseRegion(
+      onEnter: (_) => setState(() => _isHovered = true),
+      onExit: (_) => setState(() => _isHovered = false),
+      cursor: SystemMouseCursors.click,
+      child: GestureDetector(
+        onTap: widget.onSelect,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 150),
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+          decoration: BoxDecoration(
+            color: widget.isSelected
+                ? widget.theme.accent.withValues(alpha: 0.12)
+                : (_isHovered ? ClaudeTheme.bgCardHover : ClaudeTheme.bgCard),
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(
+              color: widget.isSelected
+                  ? widget.theme.accent
+                  : (_isHovered ? ClaudeTheme.borderHover : ClaudeTheme.border),
+              width: widget.isSelected ? 1.5 : 1,
+            ),
+          ),
+          child: Row(
+            children: [
+              // Theme icon / badge
+              Container(
+                width: 32,
+                height: 32,
+                decoration: BoxDecoration(
+                  color: widget.theme.bgCanvas,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: widget.theme.border, width: 1),
+                ),
+                child: Center(
+                  child: Container(
+                    width: 14,
+                    height: 14,
+                    decoration: BoxDecoration(
+                      color: widget.theme.accent,
+                      shape: BoxShape.circle,
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 12),
+
+              // Theme Info
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      widget.theme.name,
+                      style: TextStyle(
+                        fontSize: 13.5,
+                        fontWeight: FontWeight.w600,
+                        color: widget.isSelected ? widget.theme.accent : ClaudeTheme.textPrimary,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      widget.theme.description,
+                      style: TextStyle(
+                        fontSize: 11.5,
+                        color: ClaudeTheme.textTertiary,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+
+              // Color swatch dots
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  for (final c in widget.theme.previewPalette.take(4))
+                    Container(
+                      width: 10,
+                      height: 10,
+                      margin: const EdgeInsets.only(left: 4),
+                      decoration: BoxDecoration(
+                        color: c,
+                        shape: BoxShape.circle,
+                        border: Border.all(color: Colors.white24, width: 0.8),
+                      ),
+                    ),
+                ],
+              ),
+              const SizedBox(width: 8),
+
+              // Selection Checkmark
+              if (widget.isSelected)
+                Icon(
+                  Icons.check_circle_rounded,
+                  size: 18,
+                  color: widget.theme.accent,
+                )
+              else
+                Icon(
+                  Icons.radio_button_unchecked_rounded,
+                  size: 18,
+                  color: ClaudeTheme.textTertiary.withValues(alpha: 0.5),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ViewerPresetCard extends StatefulWidget {
+  final _RenderColorPreset preset;
+  final VoidCallback onSelect;
+
+  const _ViewerPresetCard({
+    required this.preset,
+    required this.onSelect,
+  });
+
+  @override
+  State<_ViewerPresetCard> createState() => _ViewerPresetCardState();
+}
+
+class _ViewerPresetCardState extends State<_ViewerPresetCard> {
+  bool _isHovered = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return MouseRegion(
+      onEnter: (_) => setState(() => _isHovered = true),
+      onExit: (_) => setState(() => _isHovered = false),
+      cursor: SystemMouseCursors.click,
+      child: GestureDetector(
+        onTap: widget.onSelect,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 150),
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+          decoration: BoxDecoration(
+            color: _isHovered ? ClaudeTheme.bgCardHover : ClaudeTheme.bgCard,
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(
+              color: _isHovered ? widget.preset.primary.withValues(alpha: 0.6) : ClaudeTheme.border,
+              width: 1,
+            ),
+          ),
+          child: Row(
+            children: [
+              // Colored dual dot indicator
+              Container(
+                width: 32,
+                height: 32,
+                decoration: BoxDecoration(
+                  color: ClaudeTheme.bgCanvas,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: ClaudeTheme.border, width: 1),
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Container(
+                      width: 8,
+                      height: 8,
+                      decoration: BoxDecoration(
+                        color: widget.preset.primary,
+                        shape: BoxShape.circle,
+                      ),
+                    ),
+                    const SizedBox(width: 3),
+                    Container(
+                      width: 8,
+                      height: 8,
+                      decoration: BoxDecoration(
+                        color: widget.preset.secondary,
+                        shape: BoxShape.circle,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 12),
+
+              // Title & description
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      widget.preset.name,
+                      style: TextStyle(
+                        fontSize: 13.5,
+                        fontWeight: FontWeight.w600,
+                        color: ClaudeTheme.textPrimary,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      widget.preset.description,
+                      style: TextStyle(
+                        fontSize: 11.5,
+                        color: ClaudeTheme.textTertiary,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+
+              // Apply indicator
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: widget.preset.primary.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(6),
+                  border: Border.all(
+                    color: widget.preset.primary.withValues(alpha: 0.35),
+                    width: 0.8,
+                  ),
+                ),
+                child: Text(
+                  'Apply',
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                    color: widget.preset.primary,
+                  ),
+                ),
+              ),
+            ],
           ),
         ),
       ),

@@ -12,6 +12,7 @@ import 'glass_sidebar.dart';
 import 'note_viewer_screen.dart';
 import 'settings_screen.dart';
 import 'theme/claude_theme.dart';
+import 'theme/style_config_manager.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -52,11 +53,29 @@ class _SuperWaveAppState extends State<SuperWaveApp> {
   int _currentTab = 0;
   String? _vaultPath;
   final GlobalKey<_HomeScreenState> _homeKey = GlobalKey<_HomeScreenState>();
+  final GlobalKey<NavigatorState> _navigatorKey = GlobalKey<NavigatorState>();
+
+  DateTime? _lastCtrlSpaceTime;
+  Timer? _singleCtrlSpaceTimer;
 
   @override
   void initState() {
     super.initState();
     _vaultPath = widget.initialVaultPath;
+    if (_vaultPath != null) {
+      StyleConfigManager.loadConfig(
+        _vaultPath!,
+        onThemeLoaded: (theme) => _currentTheme = theme,
+      );
+    }
+    HardwareKeyboard.instance.addHandler(_handleGlobalHardwareKey);
+  }
+
+  @override
+  void dispose() {
+    HardwareKeyboard.instance.removeHandler(_handleGlobalHardwareKey);
+    _singleCtrlSpaceTimer?.cancel();
+    super.dispose();
   }
 
   @override
@@ -65,6 +84,12 @@ class _SuperWaveAppState extends State<SuperWaveApp> {
     if (widget.initialVaultPath != oldWidget.initialVaultPath) {
       setState(() {
         _vaultPath = widget.initialVaultPath;
+        if (_vaultPath != null) {
+          StyleConfigManager.loadConfig(
+            _vaultPath!,
+            onThemeLoaded: (theme) => _currentTheme = theme,
+          );
+        }
       });
     }
   }
@@ -81,15 +106,73 @@ class _SuperWaveAppState extends State<SuperWaveApp> {
 
   AppThemeId _currentTheme = AppThemeId.claudeWarmDark;
 
-  void _goToHomeAndRoot() {
-    if (_homeKey.currentState?.isCtrlMagicArmed == true ||
-        _homeKey.currentState?.wasJustMagicActivated == true) {
-      // Magic is armed or just activated: Space triggers Global Search activation, not Home Root!
-      return;
+  bool _isCtrlSpaceHomeShortcut() {
+    return _homeRootShortcut.trigger == LogicalKeyboardKey.space &&
+        _homeRootShortcut.control == true &&
+        _homeRootShortcut.alt == false &&
+        _homeRootShortcut.shift == false;
+  }
+
+  bool _handleGlobalHardwareKey(KeyEvent event) {
+    if (event is! KeyDownEvent) return false;
+
+    final key = event.logicalKey;
+    final isControl = HardwareKeyboard.instance.isControlPressed ||
+        HardwareKeyboard.instance.isMetaPressed;
+
+    if (key == LogicalKeyboardKey.space && isControl) {
+      final now = DateTime.now();
+      if (_lastCtrlSpaceTime != null &&
+          now.difference(_lastCtrlSpaceTime!).inMilliseconds <= 450) {
+        // Double space while holding Ctrl: Ctrl + Space + Space -> Activate Global Search!
+        _lastCtrlSpaceTime = null;
+        _singleCtrlSpaceTimer?.cancel();
+        _activateGlobalSearch();
+        return true;
+      } else {
+        _lastCtrlSpaceTime = now;
+        if (_isCtrlSpaceHomeShortcut()) {
+          _singleCtrlSpaceTimer?.cancel();
+          _singleCtrlSpaceTimer = Timer(const Duration(milliseconds: 280), () {
+            if (mounted) {
+              _goToHomeAndRoot();
+            }
+          });
+        }
+        return true;
+      }
+    } else if (key != LogicalKeyboardKey.controlLeft &&
+               key != LogicalKeyboardKey.controlRight &&
+               key != LogicalKeyboardKey.control &&
+               key != LogicalKeyboardKey.metaLeft &&
+               key != LogicalKeyboardKey.metaRight &&
+               key != LogicalKeyboardKey.meta) {
+      _lastCtrlSpaceTime = null;
     }
+
+    return false;
+  }
+
+  void _activateGlobalSearch() {
+    _navigatorKey.currentState?.popUntil((route) => route.isFirst);
     if (_currentTab != 0) {
       setState(() {
         _currentTab = 0;
+      });
+    }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _homeKey.currentState?.activateGlobalSearch();
+    });
+  }
+
+  void _goToHomeAndRoot() {
+    _navigatorKey.currentState?.popUntil((route) => route.isFirst);
+    if (_currentTab != 0) {
+      setState(() {
+        _currentTab = 0;
+      });
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _homeKey.currentState?.resetToRoot();
       });
     } else {
       _homeKey.currentState?.resetToRoot();
@@ -102,12 +185,6 @@ class _SuperWaveAppState extends State<SuperWaveApp> {
     }
   }
 
-  void _openSearch() {
-    setState(() {
-      _currentTab = 1;
-    });
-  }
-
   Future<void> _pickVault() async {
     try {
       final String? selected = await getDirectoryPath(
@@ -117,6 +194,10 @@ class _SuperWaveAppState extends State<SuperWaveApp> {
         setState(() {
           _vaultPath = selected;
           _currentTab = 0;
+          StyleConfigManager.loadConfig(
+            selected,
+            onThemeLoaded: (theme) => _currentTheme = theme,
+          );
         });
       }
     } catch (e) {
@@ -132,6 +213,7 @@ class _SuperWaveAppState extends State<SuperWaveApp> {
         .lastOrNull;
 
     return MaterialApp(
+      navigatorKey: _navigatorKey,
       title: 'SuperWave',
       debugShowCheckedModeBanner: false,
       theme: ClaudeTheme.darkTheme,
@@ -139,8 +221,8 @@ class _SuperWaveAppState extends State<SuperWaveApp> {
         bindings: <ShortcutActivator, VoidCallback>{
           _homeRootShortcut.toActivator(): _goToHomeAndRoot,
           _parentFolderShortcut.toActivator(): _goUpParentFolder,
-          const SingleActivator(LogicalKeyboardKey.keyK, control: true): _openSearch,
-          const SingleActivator(LogicalKeyboardKey.keyK, meta: true): _openSearch,
+          const SingleActivator(LogicalKeyboardKey.keyK, control: true): _goToHomeAndRoot,
+          const SingleActivator(LogicalKeyboardKey.keyK, meta: true): _goToHomeAndRoot,
         },
         child: Focus(
           autofocus: true,
@@ -179,7 +261,11 @@ class _SuperWaveAppState extends State<SuperWaveApp> {
                           onOpenVault: _pickVault,
                           onHomeRoot: _goToHomeAndRoot,
                           onItemSelected: (index) {
-                            setState(() => _currentTab = index);
+                            if (index == 0) {
+                              _goToHomeAndRoot();
+                            } else {
+                              setState(() => _currentTab = index);
+                            }
                           },
                         ),
                       ),
@@ -205,46 +291,28 @@ class _SuperWaveAppState extends State<SuperWaveApp> {
           parentFolderShortcut: _parentFolderShortcut,
           onParentFolder: _goUpParentFolder,
           onOpenSettings: () {
-            setState(() => _currentTab = 2);
+            setState(() => _currentTab = 1);
           },
           onOpenVault: _pickVault,
-        );
-      case 1:
-        return _SearchScreen(
-          key: const ValueKey('search'),
-          vaultPath: _vaultPath,
-          onOpenNote: (path) {
-            Navigator.of(context).push<String>(
-              MaterialPageRoute(
-                builder: (_) => NoteViewerScreen(
-                  filePath: path,
-                  vaultPath: _vaultPath,
-                  parentFolderShortcut: _parentFolderShortcut,
-                  homeRootShortcut: _homeRootShortcut,
-                ),
-              ),
-            ).then((resultDir) {
-              if (resultDir != null && resultDir.isNotEmpty) {
-                setState(() {
-                  _currentTab = 0;
-                });
-                WidgetsBinding.instance.addPostFrameCallback((_) {
-                  if (resultDir == '__ROOT__') {
-                    _homeKey.currentState?.resetToRoot();
-                  } else {
-                    _homeKey.currentState?.navigateToFolder(resultDir);
-                  }
-                });
-              }
-            });
+          onThemeChanged: (themeId) {
+            setState(() => _currentTheme = themeId);
           },
         );
-      case 2:
+      case 1:
+      default:
         return SettingsScreen(
           key: const ValueKey('settings'),
           vaultPath: _vaultPath,
           onVaultPathChanged: (path) {
-            setState(() => _vaultPath = path);
+            setState(() {
+              _vaultPath = path;
+              if (path != null) {
+                StyleConfigManager.loadConfig(
+                  path,
+                  onThemeLoaded: (theme) => _currentTheme = theme,
+                );
+              }
+            });
           },
           homeRootShortcut: _homeRootShortcut,
           onShortcutChanged: (shortcut) {
@@ -259,21 +327,11 @@ class _SuperWaveAppState extends State<SuperWaveApp> {
             setState(() {
               _currentTheme = themeId;
               ClaudeTheme.setTheme(themeId);
+              if (_vaultPath != null) {
+                StyleConfigManager.saveThemeConfig(_vaultPath!, themeId);
+              }
             });
           },
-        );
-      default:
-        return _HomeScreen(
-          key: _homeKey,
-          vaultPath: _vaultPath,
-          homeRootShortcut: _homeRootShortcut,
-          onHomeRoot: _goToHomeAndRoot,
-          parentFolderShortcut: _parentFolderShortcut,
-          onParentFolder: _goUpParentFolder,
-          onOpenSettings: () {
-            setState(() => _currentTab = 2);
-          },
-          onOpenVault: _pickVault,
         );
     }
   }
@@ -291,6 +349,7 @@ class _HomeScreen extends StatefulWidget {
   final VoidCallback? onHomeRoot;
   final AppShortcut? parentFolderShortcut;
   final VoidCallback? onParentFolder;
+  final ValueChanged<AppThemeId>? onThemeChanged;
 
   const _HomeScreen({
     super.key,
@@ -301,13 +360,14 @@ class _HomeScreen extends StatefulWidget {
     this.onHomeRoot,
     this.parentFolderShortcut,
     this.onParentFolder,
+    this.onThemeChanged,
   });
 
   @override
   State<_HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<_HomeScreen> with TickerProviderStateMixin {
+class _HomeScreenState extends State<_HomeScreen> {
   List<_CardData> _cards = [];
   final List<String> _navigationStack = [];
   final Set<String> _favoritePaths = {};
@@ -321,24 +381,56 @@ class _HomeScreenState extends State<_HomeScreen> with TickerProviderStateMixin 
   final TextEditingController _searchController = TextEditingController();
   final FocusNode _searchFocusNode = FocusNode();
   String _searchQuery = '';
+  int _selectedIndex = -1;
 
-  // ── Magic Hold Ctrl + Space State & Animations ──
-  late final AnimationController _ctrlChargeController;
-  Timer? _ctrlHoldTimer;
-  Timer? _armedDisarmTimer;
-  bool _isHoldingCtrl = false;
-  bool _isCtrlMagicArmed = false;
+  int get _clampedSelectedIndex {
+    final items = _filteredCards;
+    if (items.isEmpty) return -1;
+    if (_searchQuery.trim().isNotEmpty && _selectedIndex < 0) return 0;
+    if (_selectedIndex >= items.length) return items.length - 1;
+    return _selectedIndex;
+  }
+
+  void _selectNextItem({bool reverse = false}) {
+    final items = _filteredCards;
+    if (items.isEmpty) return;
+
+    setState(() {
+      if (reverse) {
+        if (_selectedIndex <= 0) {
+          _selectedIndex = items.length - 1;
+        } else {
+          _selectedIndex--;
+        }
+      } else {
+        if (_selectedIndex < 0) {
+          _selectedIndex = 0;
+        } else {
+          _selectedIndex = (_selectedIndex + 1) % items.length;
+        }
+      }
+    });
+  }
+
+  void _openSelectedItem() {
+    final items = _filteredCards;
+    if (items.isEmpty) return;
+
+    int indexToOpen = _selectedIndex;
+    if (indexToOpen < 0 && _searchQuery.trim().isNotEmpty) {
+      indexToOpen = 0;
+    }
+    if (indexToOpen >= 0 && indexToOpen < items.length) {
+      _onItemTap(items[indexToOpen]);
+    }
+  }
+
+  // ── Global Search State ──
   bool _isGlobalSearchMode = false;
   bool _isGlobalLoading = false;
   List<_CardData> _globalCards = [];
 
-  DateTime? _lastMagicActivatedAt;
-
-  bool get isCtrlMagicArmed => _isCtrlMagicArmed;
   bool get isGlobalSearchMode => _isGlobalSearchMode;
-  bool get wasJustMagicActivated =>
-      _lastMagicActivatedAt != null &&
-      DateTime.now().difference(_lastMagicActivatedAt!).inMilliseconds < 600;
 
   int get totalNotes => (_isGlobalSearchMode ? _globalCards : _cards).where((c) => !c.isFolder).length;
   int get totalFolders => (_isGlobalSearchMode ? _globalCards : _cards).where((c) => c.isFolder).length;
@@ -385,12 +477,42 @@ class _HomeScreenState extends State<_HomeScreen> with TickerProviderStateMixin 
     _loadVault();
     _searchFocusNode.addListener(_handleFocusChange);
 
-    _ctrlChargeController = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 1000),
-    );
+    _searchFocusNode.onKeyEvent = (node, event) {
+      if (event is KeyDownEvent) {
+        final key = event.logicalKey;
+        final isShift = HardwareKeyboard.instance.isShiftPressed;
 
-    HardwareKeyboard.instance.addHandler(_handleGlobalHardwareKey);
+        if (key == LogicalKeyboardKey.tab) {
+          final items = _filteredCards;
+          if (items.isNotEmpty) {
+            _selectNextItem(reverse: isShift);
+            return KeyEventResult.handled;
+          }
+        }
+        if (key == LogicalKeyboardKey.enter || key == LogicalKeyboardKey.numpadEnter) {
+          final items = _filteredCards;
+          if (items.isNotEmpty) {
+            _openSelectedItem();
+            return KeyEventResult.handled;
+          }
+        }
+        if (key == LogicalKeyboardKey.arrowDown) {
+          final items = _filteredCards;
+          if (items.isNotEmpty) {
+            _selectNextItem(reverse: false);
+            return KeyEventResult.handled;
+          }
+        }
+        if (key == LogicalKeyboardKey.arrowUp) {
+          final items = _filteredCards;
+          if (items.isNotEmpty && _selectedIndex >= 0) {
+            _selectNextItem(reverse: true);
+            return KeyEventResult.handled;
+          }
+        }
+      }
+      return KeyEventResult.ignored;
+    };
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) {
@@ -412,86 +534,17 @@ class _HomeScreenState extends State<_HomeScreen> with TickerProviderStateMixin 
 
   @override
   void dispose() {
-    HardwareKeyboard.instance.removeHandler(_handleGlobalHardwareKey);
-    _ctrlHoldTimer?.cancel();
-    _armedDisarmTimer?.cancel();
-    _ctrlChargeController.dispose();
     _searchFocusNode.removeListener(_handleFocusChange);
     _searchController.dispose();
     _searchFocusNode.dispose();
     super.dispose();
   }
 
-  bool _handleGlobalHardwareKey(KeyEvent event) {
-    final key = event.logicalKey;
-    final isControlKey = key == LogicalKeyboardKey.controlLeft ||
-        key == LogicalKeyboardKey.controlRight ||
-        key == LogicalKeyboardKey.control;
-
-    if (event is KeyDownEvent) {
-      if (isControlKey) {
-        if (!_isHoldingCtrl && !_isCtrlMagicArmed) {
-          _isHoldingCtrl = true;
-          _ctrlChargeController.forward(from: 0.0);
-          _ctrlHoldTimer?.cancel();
-          _ctrlHoldTimer = Timer(const Duration(milliseconds: 1000), () {
-            if (mounted && _isHoldingCtrl) {
-              setState(() {
-                _isCtrlMagicArmed = true;
-                _isHoldingCtrl = false;
-              });
-              _ctrlChargeController.value = 1.0;
-
-              _armedDisarmTimer?.cancel();
-              _armedDisarmTimer = Timer(const Duration(seconds: 10), () {
-                if (mounted && _isCtrlMagicArmed) {
-                  _disarmMagic();
-                }
-              });
-            }
-          });
-          setState(() {});
-        }
-      } else if (_isCtrlMagicArmed) {
-        if (key == LogicalKeyboardKey.space) {
-          _activateGlobalSearch();
-          return true;
-        } else if (key == LogicalKeyboardKey.escape) {
-          _disarmMagic();
-          return true;
-        }
-      } else if (_isHoldingCtrl && !_isCtrlMagicArmed && !isControlKey) {
-        // Interrupted by another key while charging
-        _isHoldingCtrl = false;
-        _ctrlHoldTimer?.cancel();
-        _ctrlChargeController.reverse();
-        setState(() {});
-      }
-    } else if (event is KeyUpEvent) {
-      if (isControlKey) {
-        _isHoldingCtrl = false;
-        _ctrlHoldTimer?.cancel();
-        if (!_isCtrlMagicArmed) {
-          _ctrlChargeController.reverse();
-          setState(() {});
-        }
-      }
-    }
-
-    return false;
-  }
-
-  void _activateGlobalSearch() {
-    _lastMagicActivatedAt = DateTime.now();
-    _armedDisarmTimer?.cancel();
-    _ctrlHoldTimer?.cancel();
-    _ctrlChargeController.reset();
-
+  void activateGlobalSearch() {
     setState(() {
-      _isCtrlMagicArmed = false;
-      _isHoldingCtrl = false;
       _isGlobalSearchMode = true;
       _activeFilter = _FilterType.all;
+      _selectedIndex = _searchQuery.trim().isNotEmpty ? 0 : -1;
     });
 
     _loadGlobalVaultItems();
@@ -507,21 +560,10 @@ class _HomeScreenState extends State<_HomeScreen> with TickerProviderStateMixin 
     });
   }
 
-  void _disarmMagic() {
-    _armedDisarmTimer?.cancel();
-    _ctrlHoldTimer?.cancel();
-    _ctrlChargeController.reset();
-    if (mounted) {
-      setState(() {
-        _isCtrlMagicArmed = false;
-        _isHoldingCtrl = false;
-      });
-    }
-  }
-
   void _exitGlobalSearch() {
     setState(() {
       _isGlobalSearchMode = false;
+      _selectedIndex = -1;
     });
     _ensureSearchFocus();
   }
@@ -538,6 +580,7 @@ class _HomeScreenState extends State<_HomeScreen> with TickerProviderStateMixin 
     if (_searchQuery.isNotEmpty || _searchController.text.isNotEmpty) {
       _searchController.clear();
       _searchQuery = '';
+      _selectedIndex = -1;
     }
   }
 
@@ -555,18 +598,17 @@ class _HomeScreenState extends State<_HomeScreen> with TickerProviderStateMixin 
   }
 
   void resetToRoot() {
-    _clearSearch();
-    if (_isGlobalSearchMode) {
-      setState(() {
-        _isGlobalSearchMode = false;
-      });
-    }
-    if (_navigationStack.isNotEmpty) {
-      setState(() {
+    _searchController.clear();
+    setState(() {
+      _searchQuery = '';
+      _isGlobalSearchMode = false;
+      _activeFilter = _FilterType.all;
+      if (_navigationStack.isNotEmpty) {
         _navigationStack.clear();
         _loadVault();
-      });
-    }
+      }
+      _selectedIndex = -1;
+    });
     _ensureSearchFocus();
   }
 
@@ -580,6 +622,7 @@ class _HomeScreenState extends State<_HomeScreen> with TickerProviderStateMixin 
       setState(() {
         _navigationStack.removeLast();
         _loadVault();
+        _selectedIndex = 0;
       });
       _ensureSearchFocus();
     }
@@ -602,6 +645,7 @@ class _HomeScreenState extends State<_HomeScreen> with TickerProviderStateMixin 
           }
         }
         _loadVault();
+        _selectedIndex = 0;
       });
     }
     _ensureSearchFocus();
@@ -660,7 +704,7 @@ class _HomeScreenState extends State<_HomeScreen> with TickerProviderStateMixin 
               title: name,
               subtitle: subtitle,
               icon: Icons.folder_rounded,
-              accentColor: const Color(0xFFE5C07B),
+              accentColor: ClaudeTheme.folderAccent,
               isFolder: true,
               fullPath: entity.path,
               relativePath: relPath,
@@ -682,7 +726,7 @@ class _HomeScreenState extends State<_HomeScreen> with TickerProviderStateMixin 
               title: p.basenameWithoutExtension(entity.path),
               subtitle: subtitle,
               icon: Icons.description_outlined,
-              accentColor: const Color(0xFF9893A5),
+              accentColor: ClaudeTheme.noteAccent,
               isFolder: false,
               fullPath: entity.path,
               relativePath: relPath,
@@ -803,7 +847,7 @@ class _HomeScreenState extends State<_HomeScreen> with TickerProviderStateMixin 
               title: name,
               subtitle: '$count item${count == 1 ? "" : "s"}',
               icon: Icons.folder_rounded,
-              accentColor: const Color(0xFFE5C07B), // Warm amber from inferno-customizer
+              accentColor: ClaudeTheme.folderAccent,
               isFolder: true,
               fullPath: entity.path,
               relativePath: relPath,
@@ -822,7 +866,7 @@ class _HomeScreenState extends State<_HomeScreen> with TickerProviderStateMixin 
               title: p.basenameWithoutExtension(entity.path),
               subtitle: formattedDate,
               icon: Icons.description_outlined,
-              accentColor: const Color(0xFF9893A5),
+              accentColor: ClaudeTheme.noteAccent,
               isFolder: false,
               fullPath: entity.path,
               relativePath: relPath,
@@ -837,6 +881,9 @@ class _HomeScreenState extends State<_HomeScreen> with TickerProviderStateMixin 
         _viewMode = loadedViewMode;
         _error = false;
         _isLoading = false;
+        if (_selectedIndex >= loaded.length) {
+          _selectedIndex = loaded.isEmpty ? -1 : 0;
+        }
       });
     } catch (e) {
       debugPrint('Error loading vault: $e');
@@ -1031,19 +1078,21 @@ class _HomeScreenState extends State<_HomeScreen> with TickerProviderStateMixin 
                         _BreadcrumbSegment(
                           label: vaultName,
                           icon: Icons.folder_copy_outlined,
-                          isActive: isAtRoot,
-                          tooltip: isAtRoot ? vaultName : 'Jump to "$vaultName" (Root)',
-                          onTap: isAtRoot ? null : resetToRoot,
+                          isActive: isAtRoot && _searchQuery.isEmpty,
+                          tooltip: (isAtRoot && _searchQuery.isEmpty)
+                              ? vaultName
+                              : 'Jump to "$vaultName" (Root)',
+                          onTap: (isAtRoot && _searchQuery.isEmpty) ? null : resetToRoot,
                         ),
 
                         // Subfolder segments
                         for (int i = 0; i < _navigationStack.length; i++) ...[
-                          const Padding(
+                          Padding(
                             padding: EdgeInsets.symmetric(horizontal: 4),
                             child: Icon(
                               Icons.chevron_right_rounded,
                               size: 16,
-                              color: Color(0xFF737169),
+                              color: ClaudeTheme.textTertiary,
                             ),
                           ),
                           _BreadcrumbSegment(
@@ -1061,12 +1110,12 @@ class _HomeScreenState extends State<_HomeScreen> with TickerProviderStateMixin 
 
                         // Global search indicator if active
                         if (_isGlobalSearchMode) ...[
-                          const Padding(
+                          Padding(
                             padding: EdgeInsets.symmetric(horizontal: 4),
                             child: Icon(
                               Icons.chevron_right_rounded,
                               size: 16,
-                              color: Color(0xFF737169),
+                              color: ClaudeTheme.textTertiary,
                             ),
                           ),
                           Container(
@@ -1123,381 +1172,276 @@ class _HomeScreenState extends State<_HomeScreen> with TickerProviderStateMixin 
   }
 
   Widget _buildClaudeSearchBar() {
-    return AnimatedBuilder(
-      animation: _ctrlChargeController,
-      builder: (context, _) {
-        final chargeProgress = _ctrlChargeController.value;
+    final containerBg = ClaudeTheme.searchBarBg;
+    final containerShadow = [
+      BoxShadow(
+        color: Colors.black.withValues(alpha: 0.25),
+        blurRadius: 10,
+        offset: const Offset(0, 3),
+      ),
+    ];
 
-        // Clean, simple container styling across all states (no neon glow/aura)
-        final containerBg = ClaudeTheme.searchBarBg;
-        final containerShadow = [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.25),
-            blurRadius: 10,
-            offset: const Offset(0, 3),
-          ),
-        ];
+    final Color borderColor = _isGlobalSearchMode
+        ? ClaudeTheme.accent.withValues(alpha: 0.55)
+        : (_searchFocusNode.hasFocus
+            ? Colors.white.withValues(alpha: 0.18)
+            : Colors.white.withValues(alpha: 0.05));
 
-        Color borderColor;
-        if (_isCtrlMagicArmed || _isGlobalSearchMode) {
-          borderColor = ClaudeTheme.accent.withValues(alpha: 0.55);
-        } else if (_isHoldingCtrl) {
-          borderColor = Color.lerp(
-            _searchFocusNode.hasFocus
-                ? Colors.white.withValues(alpha: 0.18)
-                : Colors.white.withValues(alpha: 0.05),
-            ClaudeTheme.accent.withValues(alpha: 0.55),
-            chargeProgress,
-          )!;
-        } else {
-          borderColor = _searchFocusNode.hasFocus
-              ? Colors.white.withValues(alpha: 0.18)
-              : Colors.white.withValues(alpha: 0.05);
-        }
-
-        // Prefix Icon & Hint Text
-        Widget prefixIcon;
-        String hintText;
-
-        if (_isCtrlMagicArmed) {
-          prefixIcon = Icon(
-            Icons.auto_awesome_rounded,
-            size: 17,
-            color: ClaudeTheme.accent,
-          );
-          hintText = 'Magic Armed! Press [SPACE] to search vault...';
-        } else if (_isGlobalSearchMode) {
-          prefixIcon = Icon(
+    final Widget prefixIcon = _isGlobalSearchMode
+        ? Icon(
             Icons.travel_explore_rounded,
             size: 17,
             color: ClaudeTheme.accent,
-          );
-          hintText = 'Global Search: Search all notes & folders across vault...';
-        } else {
-          prefixIcon = const Icon(
+          )
+        : Icon(
             Icons.search_rounded,
             size: 17,
-            color: Color(0xFFA8A69E),
+            color: ClaudeTheme.textSecondary,
           );
-          hintText = 'Search';
-        }
 
-        // Suffix Widget
-        Widget suffixWidget;
-        if (_isCtrlMagicArmed) {
-          suffixWidget = GestureDetector(
-            onTap: _activateGlobalSearch,
-            child: MouseRegion(
-              cursor: SystemMouseCursors.click,
+    final String hintText = _isGlobalSearchMode
+        ? 'Global Search: Search all notes & folders across vault...'
+        : 'Search';
+
+    Widget suffixWidget;
+    if (_isGlobalSearchMode) {
+      suffixWidget = Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (_searchQuery.isNotEmpty)
+            IconButton(
+              icon: const Icon(Icons.close_rounded, size: 15),
+              tooltip: 'Clear search',
+              onPressed: () {
+                _searchController.clear();
+                setState(() => _searchQuery = '');
+                _searchFocusNode.requestFocus();
+              },
+            ),
+          Padding(
+            padding: const EdgeInsets.only(right: 8),
+            child: InkWell(
+              borderRadius: BorderRadius.circular(5),
+              onTap: _exitGlobalSearch,
               child: Container(
-                margin: const EdgeInsets.only(right: 8),
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                 decoration: BoxDecoration(
-                  color: ClaudeTheme.accent.withValues(alpha: 0.15),
+                  color: ClaudeTheme.accent.withValues(alpha: 0.12),
                   borderRadius: BorderRadius.circular(5),
-                  border: Border.all(
-                    color: ClaudeTheme.accent.withValues(alpha: 0.4),
-                    width: 1.0,
-                  ),
+                  border: Border.all(color: ClaudeTheme.accent.withValues(alpha: 0.35), width: 1),
                 ),
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Icon(Icons.space_bar_rounded, size: 13, color: ClaudeTheme.accent),
+                    Icon(Icons.travel_explore_rounded, size: 12, color: ClaudeTheme.accent),
                     const SizedBox(width: 4),
                     Text(
-                      'PRESS SPACE',
+                      'GLOBAL MODE',
                       style: TextStyle(
                         fontSize: 10,
                         fontWeight: FontWeight.w700,
-                        letterSpacing: 0.6,
+                        letterSpacing: 0.5,
                         fontFamily: 'monospace',
                         color: ClaudeTheme.accent,
                       ),
                     ),
+                    const SizedBox(width: 4),
+                    Icon(Icons.close_rounded, size: 11, color: ClaudeTheme.textTertiary),
                   ],
                 ),
               ),
             ),
-          );
-        } else if (_isGlobalSearchMode) {
-          suffixWidget = Row(
+          ),
+        ],
+      );
+    } else {
+      suffixWidget = _searchQuery.isNotEmpty
+          ? IconButton(
+              icon: const Icon(Icons.close_rounded, size: 15),
+              tooltip: 'Clear search',
+              onPressed: () {
+                _searchController.clear();
+                setState(() => _searchQuery = '');
+                _searchFocusNode.requestFocus();
+              },
+            )
+          : const SizedBox.shrink();
+    }
+
+    final currentCount = _isGlobalSearchMode ? _globalCards.length : _cards.length;
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(24, 6, 24, 18),
+      child: Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 960),
+          child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              if (_searchQuery.isNotEmpty)
-                IconButton(
-                  icon: const Icon(Icons.close_rounded, size: 15),
-                  tooltip: 'Clear search',
-                  onPressed: () {
-                    _searchController.clear();
-                    setState(() => _searchQuery = '');
-                    _searchFocusNode.requestFocus();
-                  },
-                ),
-              Padding(
-                padding: const EdgeInsets.only(right: 8),
-                child: InkWell(
-                  borderRadius: BorderRadius.circular(5),
-                  onTap: _exitGlobalSearch,
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                    decoration: BoxDecoration(
-                      color: ClaudeTheme.accent.withValues(alpha: 0.12),
-                      borderRadius: BorderRadius.circular(5),
-                      border: Border.all(color: ClaudeTheme.accent.withValues(alpha: 0.35), width: 1),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(Icons.travel_explore_rounded, size: 12, color: ClaudeTheme.accent),
-                        const SizedBox(width: 4),
-                        Text(
-                          'GLOBAL MODE',
-                          style: TextStyle(
-                            fontSize: 10,
-                            fontWeight: FontWeight.w700,
-                            letterSpacing: 0.5,
-                            fontFamily: 'monospace',
-                            color: ClaudeTheme.accent,
-                          ),
-                        ),
-                        const SizedBox(width: 4),
-                        Icon(Icons.close_rounded, size: 11, color: ClaudeTheme.textTertiary),
-                      ],
-                    ),
-                  ),
-                ),
-              ),
-            ],
-          );
-        } else if (_isHoldingCtrl) {
-          final remaining = ((1000 - chargeProgress * 1000) / 1000).clamp(0.0, 1.0);
-          suffixWidget = Padding(
-            padding: const EdgeInsets.only(right: 12),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
-                  decoration: BoxDecoration(
-                    color: ClaudeTheme.accent.withValues(alpha: 0.12),
-                    borderRadius: BorderRadius.circular(5),
-                    border: Border.all(color: ClaudeTheme.accent.withValues(alpha: 0.35), width: 1),
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(Icons.bolt_rounded, size: 12, color: ClaudeTheme.accent),
-                      const SizedBox(width: 4),
-                      Text(
-                        'HOLD CTRL (${remaining.toStringAsFixed(1)}s)',
-                        style: TextStyle(
-                          fontSize: 10,
-                          fontWeight: FontWeight.w700,
-                          fontFamily: 'monospace',
-                          color: ClaudeTheme.accent,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          );
-        } else {
-          suffixWidget = _searchQuery.isEmpty
-              ? const SizedBox.shrink()
-              : IconButton(
-                  icon: const Icon(Icons.close_rounded, size: 15),
-                  tooltip: 'Clear search',
-                  onPressed: () {
-                    _searchController.clear();
-                    setState(() => _searchQuery = '');
-                    _searchFocusNode.requestFocus();
-                  },
-                );
-        }
-
-        final currentCount = _isGlobalSearchMode ? _globalCards.length : _cards.length;
-
-        return Padding(
-          padding: const EdgeInsets.fromLTRB(24, 6, 24, 18),
-          child: Center(
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 960),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
+              // Filter Chips Row
+              Row(
                 children: [
-                  // Filter Chips Row
-                  Row(
-                    children: [
-                      Expanded(
-                        child: SingleChildScrollView(
-                          scrollDirection: Axis.horizontal,
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              _buildFilterChip('All', _FilterType.all, currentCount),
-                              const SizedBox(width: 6),
-                              _buildFilterChip('Notes', _FilterType.notesOnly, totalNotes),
-                              const SizedBox(width: 6),
-                              _buildFilterChip('Folders', _FilterType.foldersOnly, totalFolders),
-                              const SizedBox(width: 6),
-                              _buildFilterChip('Favorites', _FilterType.favorites, _favoritePaths.length),
-                              if (_isGlobalSearchMode) ...[
-                                const SizedBox(width: 10),
-                                Container(
-                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                                  decoration: BoxDecoration(
-                                    color: ClaudeTheme.accent.withValues(alpha: 0.12),
-                                    borderRadius: BorderRadius.circular(4),
-                                  ),
-                                  child: Row(
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: [
-                                      Icon(Icons.all_inclusive_rounded, size: 12, color: ClaudeTheme.accent),
-                                      const SizedBox(width: 4),
-                                      Text(
-                                        'GLOBAL VAULT',
-                                        style: TextStyle(
-                                          fontSize: 9.5,
-                                          fontWeight: FontWeight.w700,
-                                          fontFamily: 'monospace',
-                                          letterSpacing: 0.6,
-                                          color: ClaudeTheme.accent,
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                              ],
-                            ],
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Text(
-                        '${_filteredCards.length} items',
-                        style: const TextStyle(
-                          fontSize: 11,
-                          fontFamily: 'monospace',
-                          color: Color(0xFF737169),
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      InkWell(
-                        borderRadius: BorderRadius.circular(5),
-                        onTap: () {
-                          setState(() {
-                            _sortBy = _sortBy == _SortBy.name ? _SortBy.modified : _SortBy.name;
-                          });
-                        },
-                        child: Padding(
-                          padding: const EdgeInsets.all(3),
-                          child: Icon(
-                            _sortBy == _SortBy.name
-                                ? Icons.sort_by_alpha_rounded
-                                : Icons.calendar_today_rounded,
-                            size: 15,
-                            color: const Color(0xFF737169),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 4),
-                      InkWell(
-                        borderRadius: BorderRadius.circular(5),
-                        onTap: () {
-                          final newMode = _viewMode == _ViewMode.grid ? _ViewMode.list : _ViewMode.grid;
-                          setState(() {
-                            _viewMode = newMode;
-                          });
-                          final rootPath = widget.vaultPath;
-                          if (rootPath != null) {
-                            final currentPath = _navigationStack.isEmpty ? rootPath : _navigationStack.last;
-                            _saveFolderViewMode(currentPath, newMode);
-                          }
-                        },
-                        child: Padding(
-                          padding: const EdgeInsets.all(3),
-                          child: Icon(
-                            _viewMode == _ViewMode.grid
-                                ? Icons.view_list_rounded
-                                : Icons.grid_view_rounded,
-                            size: 16,
-                            color: const Color(0xFF737169),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-
-                  const SizedBox(height: 8),
-
-                  // Search Bar Box
-                  AnimatedContainer(
-                    duration: const Duration(milliseconds: 200),
-                    decoration: BoxDecoration(
-                      color: containerBg,
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(
-                        color: borderColor,
-                        width: 1.0,
-                      ),
-                      boxShadow: containerShadow,
-                    ),
-                    child: ClipRRect(
-                      borderRadius: BorderRadius.circular(12),
-                      child: Column(
+                  Expanded(
+                    child: SingleChildScrollView(
+                      scrollDirection: Axis.horizontal,
+                      child: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          if (_isHoldingCtrl && chargeProgress > 0.0 && !_isCtrlMagicArmed)
-                            LinearProgressIndicator(
-                              value: chargeProgress,
-                              minHeight: 2.0,
-                              backgroundColor: Colors.transparent,
-                              valueColor: AlwaysStoppedAnimation<Color>(ClaudeTheme.accent),
-                            ),
-                          TextField(
-                            controller: _searchController,
-                            focusNode: _searchFocusNode,
-                            autofocus: true,
-                            onChanged: (value) {
-                              setState(() => _searchQuery = value);
-                            },
-                            style: const TextStyle(
-                              fontSize: 13.5,
-                              color: Color(0xFFECEBE6),
-                            ),
-                            decoration: InputDecoration(
-                              filled: false,
-                              hintText: hintText,
-                              hintStyle: TextStyle(
-                                color: _isCtrlMagicArmed
-                                    ? ClaudeTheme.accent
-                                    : const Color(0xFF737169),
-                                fontSize: 13,
+                          _buildFilterChip('All', _FilterType.all, currentCount),
+                          const SizedBox(width: 6),
+                          _buildFilterChip('Notes', _FilterType.notesOnly, totalNotes),
+                          const SizedBox(width: 6),
+                          _buildFilterChip('Folders', _FilterType.foldersOnly, totalFolders),
+                          const SizedBox(width: 6),
+                          _buildFilterChip('Favorites', _FilterType.favorites, _favoritePaths.length),
+                          if (_isGlobalSearchMode) ...[
+                            const SizedBox(width: 10),
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                              decoration: BoxDecoration(
+                                color: ClaudeTheme.accent.withValues(alpha: 0.12),
+                                borderRadius: BorderRadius.circular(4),
                               ),
-                              prefixIcon: prefixIcon,
-                              suffixIcon: suffixWidget,
-                              border: InputBorder.none,
-                              enabledBorder: InputBorder.none,
-                              focusedBorder: InputBorder.none,
-                              contentPadding: const EdgeInsets.symmetric(
-                                horizontal: 14,
-                                vertical: 12,
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(Icons.all_inclusive_rounded, size: 12, color: ClaudeTheme.accent),
+                                  const SizedBox(width: 4),
+                                  Text(
+                                    'GLOBAL VAULT',
+                                    style: TextStyle(
+                                      fontSize: 9.5,
+                                      fontWeight: FontWeight.w700,
+                                      fontFamily: 'monospace',
+                                      letterSpacing: 0.6,
+                                      color: ClaudeTheme.accent,
+                                    ),
+                                  ),
+                                ],
                               ),
                             ),
-                          ),
+                          ],
                         ],
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    '${_filteredCards.length} items',
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontFamily: 'monospace',
+                      color: ClaudeTheme.textTertiary,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  InkWell(
+                    borderRadius: BorderRadius.circular(5),
+                    onTap: () {
+                      setState(() {
+                        _sortBy = _sortBy == _SortBy.name ? _SortBy.modified : _SortBy.name;
+                      });
+                    },
+                    child: Padding(
+                      padding: const EdgeInsets.all(3),
+                      child: Icon(
+                        _sortBy == _SortBy.name
+                          ? Icons.sort_by_alpha_rounded
+                          : Icons.calendar_today_rounded,
+                        size: 15,
+                        color: ClaudeTheme.textTertiary,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 4),
+                  InkWell(
+                    borderRadius: BorderRadius.circular(5),
+                    onTap: () {
+                      final newMode = _viewMode == _ViewMode.grid ? _ViewMode.list : _ViewMode.grid;
+                      setState(() {
+                        _viewMode = newMode;
+                      });
+                      final rootPath = widget.vaultPath;
+                      if (rootPath != null) {
+                        final currentPath = _navigationStack.isEmpty ? rootPath : _navigationStack.last;
+                        _saveFolderViewMode(currentPath, newMode);
+                      }
+                    },
+                    child: Padding(
+                      padding: const EdgeInsets.all(3),
+                      child: Icon(
+                        _viewMode == _ViewMode.grid
+                            ? Icons.view_list_rounded
+                            : Icons.grid_view_rounded,
+                        size: 16,
+                        color: ClaudeTheme.textTertiary,
                       ),
                     ),
                   ),
                 ],
               ),
-            ),
+
+              const SizedBox(height: 8),
+
+              // Search Bar Box
+              AnimatedContainer(
+                duration: const Duration(milliseconds: 200),
+                decoration: BoxDecoration(
+                  color: containerBg,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(
+                    color: borderColor,
+                    width: 1.0,
+                  ),
+                  boxShadow: containerShadow,
+                ),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(12),
+                  child: TextField(
+                    controller: _searchController,
+                    focusNode: _searchFocusNode,
+                    autofocus: true,
+                    onSubmitted: (_) {
+                      _openSelectedItem();
+                    },
+                    onChanged: (value) {
+                      setState(() {
+                        _searchQuery = value;
+                        if (value.trim().isNotEmpty) {
+                          _selectedIndex = 0;
+                        } else {
+                          _selectedIndex = -1;
+                        }
+                      });
+                    },
+                    style: TextStyle(
+                      fontSize: 13.5,
+                      color: ClaudeTheme.textPrimary,
+                    ),
+                    decoration: InputDecoration(
+                      filled: false,
+                      hintText: hintText,
+                      hintStyle: TextStyle(
+                        color: ClaudeTheme.textTertiary,
+                        fontSize: 13,
+                      ),
+                      prefixIcon: prefixIcon,
+                      suffixIcon: suffixWidget,
+                      border: InputBorder.none,
+                      enabledBorder: InputBorder.none,
+                      focusedBorder: InputBorder.none,
+                      contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 14,
+                        vertical: 12,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ],
           ),
-        );
-      },
+        ),
+      ),
     );
   }
 
@@ -1527,7 +1471,7 @@ class _HomeScreenState extends State<_HomeScreen> with TickerProviderStateMixin 
               style: TextStyle(
                 fontSize: 11.5,
                 fontWeight: isActive ? FontWeight.w600 : FontWeight.w500,
-                color: isActive ? const Color(0xFFECEBE6) : const Color(0xFFA8A69E),
+                color: isActive ? ClaudeTheme.textPrimary : ClaudeTheme.textSecondary,
               ),
             ),
             if (count > 0) ...[
@@ -1538,7 +1482,7 @@ class _HomeScreenState extends State<_HomeScreen> with TickerProviderStateMixin 
                   fontSize: 10,
                   fontFamily: 'monospace',
                   fontWeight: FontWeight.w600,
-                  color: isActive ? ClaudeTheme.accent : const Color(0xFF737169),
+                  color: isActive ? ClaudeTheme.accent : ClaudeTheme.textTertiary,
                 ),
               ),
             ],
@@ -1559,26 +1503,26 @@ class _HomeScreenState extends State<_HomeScreen> with TickerProviderStateMixin 
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              const Icon(
+              Icon(
                 Icons.folder_zip_outlined,
                 size: 44,
-                color: Color(0xFF737169),
+                color: ClaudeTheme.textTertiary,
               ),
               const SizedBox(height: 14),
-              const Text(
+              Text(
                 'This Folder is Empty',
                 style: TextStyle(
                   fontSize: 16,
                   fontWeight: FontWeight.w600,
-                  color: Color(0xFFECEBE6),
+                  color: ClaudeTheme.textPrimary,
                 ),
               ),
               const SizedBox(height: 4),
-              const Text(
+              Text(
                 'No subfolders or markdown (.md) notes were found here.',
                 style: TextStyle(
                   fontSize: 12.5,
-                  color: Color(0xFF737169),
+                  color: ClaudeTheme.textTertiary,
                 ),
               ),
               if (!isAtRoot) ...[
@@ -1602,26 +1546,26 @@ class _HomeScreenState extends State<_HomeScreen> with TickerProviderStateMixin 
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              const Icon(
+              Icon(
                 Icons.search_off_rounded,
                 size: 44,
-                color: Color(0xFF737169),
+                color: ClaudeTheme.textTertiary,
               ),
               const SizedBox(height: 14),
               Text(
                 'No items matching "$_searchQuery"',
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 16,
                   fontWeight: FontWeight.w600,
-                  color: Color(0xFFECEBE6),
+                  color: ClaudeTheme.textPrimary,
                 ),
               ),
               const SizedBox(height: 6),
-              const Text(
+              Text(
                 'Try a different search query or clear the filter above.',
                 style: TextStyle(
                   fontSize: 12.5,
-                  color: Color(0xFF737169),
+                  color: ClaudeTheme.textTertiary,
                 ),
               ),
               const SizedBox(height: 14),
@@ -1668,7 +1612,7 @@ class _HomeScreenState extends State<_HomeScreen> with TickerProviderStateMixin 
               // ── Folders Section (if present) ──
               if (folders.isNotEmpty) ...[
                 if (files.isNotEmpty)
-                  const Padding(
+                  Padding(
                     padding: EdgeInsets.only(left: 4, bottom: 10, top: 4),
                     child: Text(
                       'FOLDERS',
@@ -1677,7 +1621,7 @@ class _HomeScreenState extends State<_HomeScreen> with TickerProviderStateMixin 
                         fontWeight: FontWeight.w700,
                         letterSpacing: 1.4,
                         fontFamily: 'monospace',
-                        color: Color(0xFF797593),
+                        color: ClaudeTheme.textTertiary,
                       ),
                     ),
                   ),
@@ -1690,7 +1634,7 @@ class _HomeScreenState extends State<_HomeScreen> with TickerProviderStateMixin 
               // ── Notes Section (if present) ──
               if (files.isNotEmpty) ...[
                 if (folders.isNotEmpty)
-                  const Padding(
+                  Padding(
                     padding: EdgeInsets.only(left: 4, bottom: 10, top: 4),
                     child: Text(
                       'NOTES',
@@ -1699,7 +1643,7 @@ class _HomeScreenState extends State<_HomeScreen> with TickerProviderStateMixin 
                         fontWeight: FontWeight.w700,
                         letterSpacing: 1.4,
                         fontFamily: 'monospace',
-                        color: Color(0xFF797593),
+                        color: ClaudeTheme.textTertiary,
                       ),
                     ),
                   ),
@@ -1713,6 +1657,9 @@ class _HomeScreenState extends State<_HomeScreen> with TickerProviderStateMixin 
   }
 
   Widget _buildCardGrid(List<_CardData> items) {
+    final filtered = _filteredCards;
+    final currentSelected = _clampedSelectedIndex;
+
     return LayoutBuilder(
       builder: (context, constraints) {
         final crossAxisCount = constraints.maxWidth > 700
@@ -1732,10 +1679,14 @@ class _HomeScreenState extends State<_HomeScreen> with TickerProviderStateMixin 
           itemBuilder: (context, index) {
             final card = items[index];
             final isFav = _favoritePaths.contains(card.fullPath);
+            final isSelected = currentSelected >= 0 &&
+                currentSelected < filtered.length &&
+                filtered[currentSelected].fullPath == card.fullPath;
 
             return _InfernoCustomizerCard(
               card: card,
               isFavorite: isFav,
+              isSelected: isSelected,
               onToggleFavorite: () => _toggleFavorite(card.fullPath),
               onTap: () => _onItemTap(card),
             );
@@ -1746,25 +1697,32 @@ class _HomeScreenState extends State<_HomeScreen> with TickerProviderStateMixin 
   }
 
   Widget _buildListView(List<_CardData> items) {
+    final filtered = _filteredCards;
+    final currentSelected = _clampedSelectedIndex;
+
     return Container(
       decoration: BoxDecoration(
-        color: const Color(0xFF21201D),
+        color: ClaudeTheme.bgCard,
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.05), width: 1),
+        border: Border.all(color: ClaudeTheme.borderSubtle, width: 1),
       ),
       child: ListView.separated(
         shrinkWrap: true,
         physics: const NeverScrollableScrollPhysics(),
         itemCount: items.length,
         separatorBuilder: (context, index) =>
-            Divider(height: 1, color: Colors.white.withValues(alpha: 0.05)),
+            Divider(height: 1, color: ClaudeTheme.borderSubtle),
         itemBuilder: (context, index) {
           final card = items[index];
           final isFav = _favoritePaths.contains(card.fullPath);
+          final isSelected = currentSelected >= 0 &&
+              currentSelected < filtered.length &&
+              filtered[currentSelected].fullPath == card.fullPath;
 
           return _ClaudeListRow(
             card: card,
             isFavorite: isFav,
+            isSelected: isSelected,
             onToggleFavorite: () => _toggleFavorite(card.fullPath),
             onTap: () => _onItemTap(card),
           );
@@ -1791,11 +1749,13 @@ class _HomeScreenState extends State<_HomeScreen> with TickerProviderStateMixin 
           _navigationStack.clear();
           _navigationStack.addAll(newStack);
           _loadVault();
+          _selectedIndex = 0;
         });
       } else {
         setState(() {
           _navigationStack.add(card.fullPath);
           _loadVault();
+          _selectedIndex = 0;
         });
       }
       _ensureSearchFocus();
@@ -1807,6 +1767,7 @@ class _HomeScreenState extends State<_HomeScreen> with TickerProviderStateMixin 
             vaultPath: widget.vaultPath,
             parentFolderShortcut: widget.parentFolderShortcut,
             homeRootShortcut: widget.homeRootShortcut,
+            onThemeChanged: widget.onThemeChanged,
           ),
         ),
       ).then((resultDir) {
@@ -1831,18 +1792,6 @@ class _HomeScreenState extends State<_HomeScreen> with TickerProviderStateMixin 
     final isShift = HardwareKeyboard.instance.isShiftPressed;
     final key = event.logicalKey;
 
-    // 0. Magic Armed Space or Escape Handling
-    if (_isCtrlMagicArmed) {
-      if (key == LogicalKeyboardKey.space) {
-        _activateGlobalSearch();
-        return KeyEventResult.handled;
-      }
-      if (key == LogicalKeyboardKey.escape) {
-        _disarmMagic();
-        return KeyEventResult.handled;
-      }
-    }
-
     // 1. Home directory shortcut check (Global / Always active)
     if (widget.homeRootShortcut != null) {
       final s = widget.homeRootShortcut!;
@@ -1851,14 +1800,15 @@ class _HomeScreenState extends State<_HomeScreen> with TickerProviderStateMixin 
           s.alt == isAlt &&
           s.shift == isShift &&
           s.meta == isMeta) {
-        widget.onHomeRoot?.call();
-        return KeyEventResult.handled;
+        if (s.trigger != LogicalKeyboardKey.space || !s.control) {
+          widget.onHomeRoot?.call();
+          return KeyEventResult.handled;
+        }
       }
     }
 
-    // Default Ctrl+Space or Ctrl+H / Alt+Home fallback for Home Root (only if not armed and not in global search)
-    if (!_isCtrlMagicArmed && !_isGlobalSearchMode && ((isControl && key == LogicalKeyboardKey.space) ||
-        ((isControl || isAlt) && (key == LogicalKeyboardKey.home || key == LogicalKeyboardKey.keyH)))) {
+    // Default Ctrl+H / Alt+Home fallback for Home Root
+    if ((isControl || isAlt) && (key == LogicalKeyboardKey.home || key == LogicalKeyboardKey.keyH)) {
       widget.onHomeRoot?.call();
       return KeyEventResult.handled;
     }
@@ -1882,11 +1832,55 @@ class _HomeScreenState extends State<_HomeScreen> with TickerProviderStateMixin 
       return KeyEventResult.handled;
     }
 
-    // 3. Escape key: clear search or exit global search or navigate up directory hierarchy
+    // 3. Tab / Shift+Tab Navigation across Cards / List items
+    if (key == LogicalKeyboardKey.tab) {
+      final items = _filteredCards;
+      if (items.isNotEmpty) {
+        _selectNextItem(reverse: isShift);
+        return KeyEventResult.handled;
+      }
+    }
+
+    // 4. Enter / Numpad Enter: Open currently selected card / item (or 1st item in search)
+    if (key == LogicalKeyboardKey.enter || key == LogicalKeyboardKey.numpadEnter) {
+      final items = _filteredCards;
+      if (items.isNotEmpty) {
+        int indexToOpen = _selectedIndex;
+        if (indexToOpen < 0 && _searchQuery.trim().isNotEmpty) {
+          indexToOpen = 0;
+        }
+        if (indexToOpen >= 0 && indexToOpen < items.length) {
+          _openSelectedItem();
+          return KeyEventResult.handled;
+        }
+      }
+    }
+
+    // 5. Arrow Down / Arrow Up navigation
+    if (key == LogicalKeyboardKey.arrowDown) {
+      final items = _filteredCards;
+      if (items.isNotEmpty) {
+        _selectNextItem(reverse: false);
+        return KeyEventResult.handled;
+      }
+    }
+
+    if (key == LogicalKeyboardKey.arrowUp) {
+      final items = _filteredCards;
+      if (items.isNotEmpty && _selectedIndex >= 0) {
+        _selectNextItem(reverse: true);
+        return KeyEventResult.handled;
+      }
+    }
+
+    // 6. Escape key: clear search or exit global search or navigate up directory hierarchy
     if (key == LogicalKeyboardKey.escape) {
       if (_searchQuery.isNotEmpty || _searchController.text.isNotEmpty) {
         _searchController.clear();
-        setState(() => _searchQuery = '');
+        setState(() {
+          _searchQuery = '';
+          _selectedIndex = -1;
+        });
         _ensureSearchFocus();
         return KeyEventResult.handled;
       }
@@ -1901,7 +1895,7 @@ class _HomeScreenState extends State<_HomeScreen> with TickerProviderStateMixin 
       return KeyEventResult.ignored;
     }
 
-    // 4. Backspace key handling (always removes text smoothly)
+    // 7. Backspace key handling (always removes text smoothly)
     if (key == LogicalKeyboardKey.backspace) {
       if (_searchController.text.isNotEmpty) {
         final text = _searchController.text;
@@ -1913,7 +1907,10 @@ class _HomeScreenState extends State<_HomeScreen> with TickerProviderStateMixin 
             text: newText,
             selection: TextSelection.collapsed(offset: sel.start),
           );
-          setState(() => _searchQuery = newText);
+          setState(() {
+            _searchQuery = newText;
+            _selectedIndex = newText.trim().isNotEmpty ? 0 : -1;
+          });
           _ensureSearchFocus();
           return KeyEventResult.handled;
         }
@@ -1925,7 +1922,10 @@ class _HomeScreenState extends State<_HomeScreen> with TickerProviderStateMixin 
             text: newText,
             selection: TextSelection.collapsed(offset: cursor - 1),
           );
-          setState(() => _searchQuery = newText);
+          setState(() {
+            _searchQuery = newText;
+            _selectedIndex = newText.trim().isNotEmpty ? 0 : -1;
+          });
           _ensureSearchFocus();
           return KeyEventResult.handled;
         }
@@ -1933,10 +1933,10 @@ class _HomeScreenState extends State<_HomeScreen> with TickerProviderStateMixin 
       return KeyEventResult.handled;
     }
 
-    // 5. Ignore modifier combinations (Ctrl+C, Ctrl+V, etc.)
+    // 8. Ignore modifier combinations (Ctrl+C, Ctrl+V, etc.)
     if (isControl || isAlt || isMeta) return KeyEventResult.ignored;
 
-    // 6. Type-to-search: automatically routes keystrokes to the search box
+    // 9. Type-to-search: automatically routes keystrokes to the search box
     if (!_searchFocusNode.hasFocus) {
       final character = event.character;
       if (character != null && character.isNotEmpty && character.codeUnitAt(0) >= 32) {
@@ -1947,7 +1947,10 @@ class _HomeScreenState extends State<_HomeScreen> with TickerProviderStateMixin 
           text: newText,
           selection: TextSelection.collapsed(offset: newText.length),
         );
-        setState(() => _searchQuery = newText);
+        setState(() {
+          _searchQuery = newText;
+          _selectedIndex = 0;
+        });
         return KeyEventResult.handled;
       }
     }
@@ -1962,12 +1965,14 @@ class _HomeScreenState extends State<_HomeScreen> with TickerProviderStateMixin 
 class _InfernoCustomizerCard extends StatefulWidget {
   final _CardData card;
   final bool isFavorite;
+  final bool isSelected;
   final VoidCallback onToggleFavorite;
   final VoidCallback onTap;
 
   const _InfernoCustomizerCard({
     required this.card,
     required this.isFavorite,
+    this.isSelected = false,
     required this.onToggleFavorite,
     required this.onTap,
   });
@@ -1984,14 +1989,16 @@ class _InfernoCustomizerCardState extends State<_InfernoCustomizerCard> {
   @override
   Widget build(BuildContext context) {
     final card = widget.card;
+    final isSelected = widget.isSelected;
+    final isActive = _isHovered || isSelected;
 
     // Inferno customizer pure fill colors matching current theme
-    final bgColor = _isHovered
+    final bgColor = isSelected
         ? ClaudeTheme.cardHoverColor
-        : ClaudeTheme.cardBaseColor;
+        : (_isHovered ? ClaudeTheme.cardHoverColor : ClaudeTheme.cardBaseColor);
 
-    final double translateY = _isPressed ? -1.0 : (_isHovered ? -4.0 : 0.0);
-    final double scale = _isPressed ? 0.98 : (_isHovered ? 1.025 : 1.0);
+    final double translateY = _isPressed ? -0.5 : (isActive ? -2.5 : 0.0);
+    final double scale = _isPressed ? 0.99 : (isActive ? 1.012 : 1.0);
 
     return MouseRegion(
       onEnter: (_) => setState(() => _isHovered = true),
@@ -2011,7 +2018,7 @@ class _InfernoCustomizerCardState extends State<_InfernoCustomizerCard> {
         onTapCancel: () => setState(() => _isPressed = false),
         onTap: widget.onTap,
         child: AnimatedContainer(
-          duration: const Duration(milliseconds: 250),
+          duration: const Duration(milliseconds: 180),
           curve: const Cubic(0.25, 0.8, 0.25, 1.0),
           transform: Matrix4.identity()
             ..translateByDouble(0.0, translateY, 0.0, 1.0)
@@ -2019,17 +2026,31 @@ class _InfernoCustomizerCardState extends State<_InfernoCustomizerCard> {
           decoration: BoxDecoration(
             color: bgColor,
             borderRadius: BorderRadius.circular(16),
-            border: null, // Pure fill: No edge strokes / borders!
+            border: isSelected
+                ? Border.all(
+                    color: Colors.white.withValues(alpha: 0.16),
+                    width: 1.2,
+                  )
+                : Border.all(
+                    color: Colors.transparent,
+                    width: 1.2,
+                  ),
             boxShadow: [
               BoxShadow(
-                color: Colors.black.withValues(alpha: _isHovered ? 0.45 : 0.25),
-                blurRadius: _isHovered ? 24.0 : 16.0,
-                offset: Offset(0, _isHovered ? 8.0 : 4.0),
+                color: Colors.black.withValues(alpha: isActive ? 0.35 : 0.22),
+                blurRadius: isActive ? 16.0 : 10.0,
+                offset: Offset(0, isActive ? 5.0 : 3.0),
               ),
+              if (isSelected)
+                BoxShadow(
+                  color: Colors.white.withValues(alpha: 0.03),
+                  blurRadius: 1.0,
+                  offset: const Offset(0, 0),
+                ),
             ],
           ),
           child: ClipRRect(
-            borderRadius: BorderRadius.circular(16),
+            borderRadius: BorderRadius.circular(15),
             child: LayoutBuilder(
               builder: (context, constraints) {
                 final width = constraints.maxWidth;
@@ -2044,9 +2065,9 @@ class _InfernoCustomizerCardState extends State<_InfernoCustomizerCard> {
                 return Stack(
                   fit: StackFit.expand,
                   children: [
-                    // Spotlight radial glow following cursor
+                    // Spotlight radial glow following cursor only on hover
                     AnimatedOpacity(
-                      duration: const Duration(milliseconds: 400),
+                      duration: const Duration(milliseconds: 250),
                       opacity: _isHovered ? 1.0 : 0.0,
                       child: IgnorePointer(
                         child: Container(
@@ -2055,7 +2076,7 @@ class _InfernoCustomizerCardState extends State<_InfernoCustomizerCard> {
                               center: mouseAlignment,
                               radius: spotlightRadius,
                               colors: [
-                                Colors.white.withValues(alpha: 0.05),
+                                Colors.white.withValues(alpha: 0.04),
                                 Colors.transparent,
                               ],
                               stops: const [0.0, 0.8],
@@ -2067,7 +2088,7 @@ class _InfernoCustomizerCardState extends State<_InfernoCustomizerCard> {
 
                     // Glare overlay
                     AnimatedOpacity(
-                      duration: const Duration(milliseconds: 400),
+                      duration: const Duration(milliseconds: 250),
                       opacity: _isHovered ? 1.0 : 0.0,
                       child: IgnorePointer(
                         child: Container(
@@ -2077,7 +2098,7 @@ class _InfernoCustomizerCardState extends State<_InfernoCustomizerCard> {
                               center: mouseAlignment,
                               radius: 1.2,
                               colors: [
-                                Colors.white.withValues(alpha: 0.06),
+                                Colors.white.withValues(alpha: 0.05),
                                 Colors.transparent,
                               ],
                               stops: const [0.0, 0.6],
@@ -2113,7 +2134,7 @@ class _InfernoCustomizerCardState extends State<_InfernoCustomizerCard> {
                                   overflow: TextOverflow.ellipsis,
                                   style: TextStyle(
                                     fontSize: 14,
-                                    fontWeight: FontWeight.w700,
+                                    fontWeight: isSelected ? FontWeight.w700 : FontWeight.w600,
                                     letterSpacing: -0.2,
                                     color: ClaudeTheme.textPrimary,
                                   ),
@@ -2146,6 +2167,39 @@ class _InfernoCustomizerCardState extends State<_InfernoCustomizerCard> {
                                   ),
                                 ),
                               ),
+                              if (isSelected)
+                                Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                  decoration: BoxDecoration(
+                                    color: Colors.white.withValues(alpha: 0.08),
+                                    borderRadius: BorderRadius.circular(4),
+                                    border: Border.all(
+                                      color: Colors.white.withValues(alpha: 0.12),
+                                      width: 0.8,
+                                    ),
+                                  ),
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Icon(
+                                        Icons.keyboard_return_rounded,
+                                        size: 9.5,
+                                        color: ClaudeTheme.textSecondary,
+                                      ),
+                                      const SizedBox(width: 3),
+                                      Text(
+                                        'ENTER',
+                                        style: TextStyle(
+                                          fontSize: 8.5,
+                                          fontWeight: FontWeight.w600,
+                                          fontFamily: 'monospace',
+                                          letterSpacing: 0.5,
+                                          color: ClaudeTheme.textSecondary,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
                             ],
                           ),
                         ],
@@ -2165,12 +2219,14 @@ class _InfernoCustomizerCardState extends State<_InfernoCustomizerCard> {
 class _ClaudeListRow extends StatefulWidget {
   final _CardData card;
   final bool isFavorite;
+  final bool isSelected;
   final VoidCallback onToggleFavorite;
   final VoidCallback onTap;
 
   const _ClaudeListRow({
     required this.card,
     required this.isFavorite,
+    this.isSelected = false,
     required this.onToggleFavorite,
     required this.onTap,
   });
@@ -2185,6 +2241,7 @@ class _ClaudeListRowState extends State<_ClaudeListRow> {
   @override
   Widget build(BuildContext context) {
     final card = widget.card;
+    final isSelected = widget.isSelected;
 
     return MouseRegion(
       onEnter: (_) => setState(() => _isHovered = true),
@@ -2192,9 +2249,20 @@ class _ClaudeListRowState extends State<_ClaudeListRow> {
       cursor: SystemMouseCursors.click,
       child: InkWell(
         onTap: widget.onTap,
-        child: Container(
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 150),
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-          color: _isHovered ? Colors.white.withValues(alpha: 0.05) : Colors.transparent,
+          decoration: BoxDecoration(
+            color: isSelected
+                ? Colors.white.withValues(alpha: 0.05)
+                : (_isHovered ? ClaudeTheme.bgCardHover : Colors.transparent),
+            border: Border(
+              left: BorderSide(
+                color: isSelected ? Colors.white.withValues(alpha: 0.35) : Colors.transparent,
+                width: 3.0,
+              ),
+            ),
+          ),
           child: Row(
             children: [
               Icon(
@@ -2212,7 +2280,7 @@ class _ClaudeListRowState extends State<_ClaudeListRow> {
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
                     fontSize: 13.5,
-                    fontWeight: FontWeight.w600,
+                    fontWeight: isSelected ? FontWeight.w700 : FontWeight.w600,
                     color: ClaudeTheme.textPrimary,
                   ),
                 ),
@@ -2230,14 +2298,54 @@ class _ClaudeListRowState extends State<_ClaudeListRow> {
               ),
               Expanded(
                 flex: 3,
-                child: Text(
-                  card.subtitle,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    fontSize: 11,
-                    fontFamily: 'monospace',
-                    color: ClaudeTheme.textTertiary,
-                  ),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        card.subtitle,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 11,
+                          fontFamily: 'monospace',
+                          color: ClaudeTheme.textTertiary,
+                        ),
+                      ),
+                    ),
+                    if (isSelected)
+                      Container(
+                        margin: const EdgeInsets.only(left: 8),
+                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: Colors.white.withValues(alpha: 0.08),
+                          borderRadius: BorderRadius.circular(4),
+                          border: Border.all(
+                            color: Colors.white.withValues(alpha: 0.12),
+                            width: 0.8,
+                          ),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              Icons.keyboard_return_rounded,
+                              size: 10,
+                              color: ClaudeTheme.textSecondary,
+                            ),
+                            const SizedBox(width: 3),
+                            Text(
+                              'ENTER',
+                              style: TextStyle(
+                                fontSize: 8.5,
+                                fontWeight: FontWeight.w600,
+                                fontFamily: 'monospace',
+                                letterSpacing: 0.4,
+                                color: ClaudeTheme.textSecondary,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                  ],
                 ),
               ),
             ],
@@ -2306,7 +2414,7 @@ class _BreadcrumbSegmentState extends State<_BreadcrumbSegment> {
                   size: 14,
                   color: widget.isActive
                       ? ClaudeTheme.accent
-                      : (_isHovered ? const Color(0xFFECEBE6) : const Color(0xFF9893A5)),
+                      : (_isHovered ? ClaudeTheme.textPrimary : ClaudeTheme.textSecondary),
                 ),
                 const SizedBox(width: 5),
                 Text(
@@ -2315,8 +2423,8 @@ class _BreadcrumbSegmentState extends State<_BreadcrumbSegment> {
                     fontSize: 12.5,
                     fontWeight: widget.isActive ? FontWeight.w600 : FontWeight.w500,
                     color: widget.isActive
-                        ? const Color(0xFFECEBE6)
-                        : (_isHovered ? const Color(0xFFECEBE6) : const Color(0xFFA8A69E)),
+                        ? ClaudeTheme.textPrimary
+                        : (_isHovered ? ClaudeTheme.textPrimary : ClaudeTheme.textSecondary),
                   ),
                 ),
               ],
@@ -2366,17 +2474,17 @@ class _BreadcrumbBackButtonState extends State<_BreadcrumbBackButton> {
             duration: const Duration(milliseconds: 150),
             padding: const EdgeInsets.all(5),
             decoration: BoxDecoration(
-              color: _isHovered ? Colors.white.withValues(alpha: 0.10) : const Color(0xFF24221F),
+              color: _isHovered ? ClaudeTheme.bgCardHover : ClaudeTheme.bgCard,
               borderRadius: BorderRadius.circular(6),
               border: Border.all(
-                color: _isHovered ? Colors.white.withValues(alpha: 0.18) : const Color(0xFF3B3835),
+                color: _isHovered ? ClaudeTheme.borderHover : ClaudeTheme.border,
                 width: 1,
               ),
             ),
-            child: const Icon(
+            child: Icon(
               Icons.arrow_back_rounded,
               size: 14,
-              color: Color(0xFFECEBE6),
+              color: ClaudeTheme.textPrimary,
             ),
           ),
         ),
@@ -2406,252 +2514,5 @@ class _CardData {
     this.relativePath,
     this.modifiedDate,
     this.itemCount = 0,
-  });
-}
-
-class _SearchScreen extends StatefulWidget {
-  final String? vaultPath;
-  final ValueChanged<String>? onOpenNote;
-
-  const _SearchScreen({super.key, this.vaultPath, this.onOpenNote});
-
-  @override
-  State<_SearchScreen> createState() => _SearchScreenState();
-}
-
-class _SearchScreenState extends State<_SearchScreen> {
-  final TextEditingController _controller = TextEditingController();
-  List<_SearchResult> _results = [];
-  bool _isSearching = false;
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  void _search(String query) {
-    final root = widget.vaultPath;
-    if (root == null || query.trim().isEmpty) {
-      setState(() => _results = []);
-      return;
-    }
-
-    setState(() => _isSearching = true);
-
-    try {
-      final dir = Directory(root);
-      if (!dir.existsSync()) {
-        setState(() {
-          _results = [];
-          _isSearching = false;
-        });
-        return;
-      }
-
-      final q = query.trim().toLowerCase();
-      final List<_SearchResult> matches = [];
-
-      final entities = dir.listSync(recursive: true);
-      for (final entity in entities) {
-        if (entity is File && entity.path.endsWith('.md')) {
-          final fileName = p.basenameWithoutExtension(entity.path);
-          final relativePath = p.relative(entity.path, from: root);
-
-          if (fileName.toLowerCase().contains(q)) {
-            matches.add(_SearchResult(
-              filePath: entity.path,
-              relativePath: relativePath,
-              title: fileName,
-              matchType: 'Filename match',
-            ));
-          } else {
-            try {
-              final content = entity.readAsStringSync();
-              final lines = content.split('\n');
-              for (int i = 0; i < lines.length; i++) {
-                if (lines[i].toLowerCase().contains(q)) {
-                  matches.add(_SearchResult(
-                    filePath: entity.path,
-                    relativePath: relativePath,
-                    title: fileName,
-                    matchType: 'Line ${i + 1}: ${lines[i].trim()}',
-                  ));
-                  break; // 1 match per file
-                }
-              }
-            } catch (_) {}
-          }
-        }
-      }
-
-      setState(() {
-        _results = matches;
-        _isSearching = false;
-      });
-    } catch (e) {
-      debugPrint('Search error: $e');
-      setState(() {
-        _results = [];
-        _isSearching = false;
-      });
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return SingleChildScrollView(
-      padding: const EdgeInsets.fromLTRB(32, 28, 32, 40),
-      child: Center(
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 860),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                'Deep Search',
-                style: TextStyle(
-                  fontSize: 22,
-                  fontWeight: FontWeight.w700,
-                  letterSpacing: -0.4,
-                  color: ClaudeTheme.textPrimary,
-                ),
-              ),
-              const SizedBox(height: 4),
-              Text(
-                'Search across note titles, contents, and subdirectories in your vault.',
-                style: TextStyle(
-                  fontSize: 13,
-                  color: ClaudeTheme.textSecondary,
-                ),
-              ),
-              const SizedBox(height: 20),
-              TextField(
-                controller: _controller,
-                autofocus: true,
-                onChanged: _search,
-                decoration: InputDecoration(
-                  hintText: 'Type to search all markdown notes in vault...',
-                  prefixIcon: const Icon(Icons.search_rounded),
-                  suffixIcon: _controller.text.isNotEmpty
-                      ? IconButton(
-                          icon: const Icon(Icons.close_rounded, size: 15),
-                          onPressed: () {
-                            _controller.clear();
-                            _search('');
-                          },
-                        )
-                      : null,
-                ),
-              ),
-              const SizedBox(height: 20),
-
-              if (widget.vaultPath == null) ...[
-                Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 28),
-                  child: Center(
-                    child: Text(
-                      'Please configure a vault in settings to enable full-text search.',
-                      style: TextStyle(color: ClaudeTheme.textTertiary),
-                    ),
-                  ),
-                ),
-              ] else if (_isSearching) ...[
-                Center(
-                  child: Padding(
-                    padding: const EdgeInsets.all(28),
-                    child: CircularProgressIndicator(
-                      color: ClaudeTheme.accent,
-                      strokeWidth: 2,
-                    ),
-                  ),
-                ),
-              ] else if (_results.isNotEmpty) ...[
-                Text(
-                  '${_results.length} results found',
-                  style: TextStyle(
-                    fontSize: 11.5,
-                    fontFamily: 'monospace',
-                    color: ClaudeTheme.textTertiary,
-                  ),
-                ),
-                const SizedBox(height: 10),
-                Container(
-                  decoration: BoxDecoration(
-                    color: ClaudeTheme.bgCard,
-                    borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: ClaudeTheme.border, width: 1),
-                  ),
-                  child: ListView.separated(
-                    shrinkWrap: true,
-                    physics: const NeverScrollableScrollPhysics(),
-                    itemCount: _results.length,
-                    separatorBuilder: (context, index) =>
-                        Divider(height: 1, color: ClaudeTheme.border),
-                    itemBuilder: (context, index) {
-                      final item = _results[index];
-                      return ListTile(
-                        leading: Icon(
-                          Icons.description_rounded,
-                          size: 18,
-                          color: ClaudeTheme.accent,
-                        ),
-                        title: Text(
-                          item.title,
-                          style: TextStyle(
-                            fontSize: 13.5,
-                            fontWeight: FontWeight.w600,
-                            color: ClaudeTheme.textPrimary,
-                          ),
-                        ),
-                        subtitle: Text(
-                          '${item.relativePath} • ${item.matchType}',
-                          style: TextStyle(
-                            fontSize: 11.5,
-                            color: ClaudeTheme.textTertiary,
-                          ),
-                        ),
-                        trailing: Icon(
-                          Icons.arrow_forward_ios_rounded,
-                          size: 13,
-                          color: ClaudeTheme.textTertiary,
-                        ),
-                        onTap: () {
-                          widget.onOpenNote?.call(item.filePath);
-                        },
-                      );
-                    },
-                  ),
-                ),
-              ] else if (_controller.text.isNotEmpty) ...[
-                Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 40),
-                  child: Center(
-                    child: Text(
-                      'No notes found matching "${_controller.text}"',
-                      style: TextStyle(color: ClaudeTheme.textTertiary),
-                    ),
-                  ),
-                ),
-              ],
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _SearchResult {
-  final String filePath;
-  final String relativePath;
-  final String title;
-  final String matchType;
-
-  const _SearchResult({
-    required this.filePath,
-    required this.relativePath,
-    required this.title,
-    required this.matchType,
   });
 }

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'render_colors.dart';
 
 enum AppThemeId {
   claudeWarmDark,
@@ -413,11 +414,59 @@ class AppThemeData {
 /// Global theme accessor with dynamic theme switching support.
 class ClaudeTheme {
   static AppThemeData _current = AppThemeData.claudeWarmDark;
+  static RenderColors _renderColors = RenderColors.defaultsFor(AppThemeData.claudeWarmDark);
+  static Map<String, int> _renderOverrides = {};
+  static Map<String, String> _fontAssignments = {
+    'ui': 'Inter',
+    'headings': 'Inter',
+    'notes': 'Inter',
+    'monospace': 'JetBrains Mono',
+  };
 
   static AppThemeData get current => _current;
+  static RenderColors get renderColors => _renderColors;
+  static Map<String, int> get renderOverrides => _renderOverrides;
+  static Map<String, String> get fontAssignments => Map.unmodifiable(_fontAssignments);
+
+  static String get uiFont => _fontAssignments['ui'] ?? 'Inter';
+  static String get headingsFont => _fontAssignments['headings'] ?? 'Inter';
+  static String get notesFont => _fontAssignments['notes'] ?? 'Inter';
+  static String get monospaceFont => _fontAssignments['monospace'] ?? 'JetBrains Mono';
+
+  static void setFontAssignment(String slot, String? family) {
+    if (family == null || family.isEmpty || family == 'Default') {
+      _fontAssignments.remove(slot);
+    } else {
+      _fontAssignments[slot] = family;
+    }
+  }
+
+  static void setAllFontAssignments(Map<String, String> fonts) {
+    _fontAssignments = Map.from(fonts);
+  }
 
   static void setTheme(AppThemeId id) {
     _current = AppThemeData.fromId(id);
+    _renderColors = RenderColors.merge(RenderColors.defaultsFor(_current), _renderOverrides);
+  }
+
+  static void setRenderOverride(String key, int? argbColor) {
+    if (argbColor == null) {
+      _renderOverrides.remove(key);
+    } else {
+      _renderOverrides[key] = argbColor;
+    }
+    _renderColors = RenderColors.merge(RenderColors.defaultsFor(_current), _renderOverrides);
+  }
+
+  static void setAllRenderOverrides(Map<String, int> overrides) {
+    _renderOverrides = Map.from(overrides);
+    _renderColors = RenderColors.merge(RenderColors.defaultsFor(_current), _renderOverrides);
+  }
+
+  static void resetAllRenderOverrides() {
+    _renderOverrides.clear();
+    _renderColors = RenderColors.defaultsFor(_current);
   }
 
   // ── Palette Accessors ──

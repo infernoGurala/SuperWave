@@ -4,7 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:superwave/main.dart';
 
 void main() {
-  testWidgets('Holding Ctrl for 1s arms magic and pressing Space activates Global Search',
+  testWidgets('Pressing Ctrl + Space + Space instantly activates Global Search Mode',
       (WidgetTester tester) async {
     final tempDir = Directory.systemTemp.createTempSync('superwave_test_vault_');
     try {
@@ -17,34 +17,21 @@ void main() {
 
       // Verify notes in root are loaded
       expect(find.text('RootNote'), findsOneWidget);
+      expect(find.text('SubNote'), findsNothing); // In subfolder, not visible at root initially
 
-      // Verify initial Ctrl press starts charging
+      // Press Ctrl + Space (1st space)
       await tester.sendKeyDownEvent(LogicalKeyboardKey.control);
-      await tester.pump(const Duration(milliseconds: 300));
-      expect(find.textContaining('HOLD CTRL'), findsOneWidget);
+      await tester.sendKeyEvent(LogicalKeyboardKey.space);
+      await tester.pump(const Duration(milliseconds: 100));
 
-      // Release early (<1s) -> resets
-      await tester.sendKeyUpEvent(LogicalKeyboardKey.control);
-      await tester.pump(const Duration(milliseconds: 200));
-      expect(find.textContaining('HOLD CTRL'), findsNothing);
-      expect(find.textContaining('PRESS SPACE'), findsNothing);
-
-      // Now hold Ctrl for full 1 second
-      await tester.sendKeyDownEvent(LogicalKeyboardKey.control);
-      await tester.pump(const Duration(milliseconds: 1100));
-
-      // Verify magic is ARMED! (Shows PRESS SPACE badge and magic text)
-      expect(find.text('PRESS SPACE'), findsOneWidget);
-      expect(find.textContaining('Magic Armed'), findsOneWidget);
-
-      // Press Space while armed -> activates Global Search!
+      // Press Space again within double-tap window (2nd space -> Ctrl + Space + Space!)
       await tester.sendKeyEvent(LogicalKeyboardKey.space);
       await tester.sendKeyUpEvent(LogicalKeyboardKey.control);
       await tester.pumpAndSettle();
 
-      // Verify Global Search mode is ACTIVE and finds both root & nested files/folders
+      // Verify Global Search mode is ACTIVE instantly!
       expect(find.text('GLOBAL MODE'), findsOneWidget);
-      expect(find.textContaining('Search all notes & folders'), findsOneWidget);
+      expect(find.textContaining('Global Search: Search all notes & folders'), findsOneWidget);
       expect(find.text('SubNote'), findsOneWidget);
       expect(find.text('Projects'), findsOneWidget);
 
@@ -53,6 +40,8 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.text('GLOBAL MODE'), findsNothing);
+      expect(find.text('SubNote'), findsNothing);
+      expect(find.text('RootNote'), findsOneWidget);
     } finally {
       if (tempDir.existsSync()) {
         tempDir.deleteSync(recursive: true);

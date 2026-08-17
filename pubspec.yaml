@@ -37,6 +37,7 @@ dependencies:
   file_selector: ^1.1.0
   path: ^1.9.1
   flutter_markdown_plus: ^1.0.12
+  markdown: ^7.3.0
   window_manager: ^0.5.2
 dev_dependencies:
   flutter_test:

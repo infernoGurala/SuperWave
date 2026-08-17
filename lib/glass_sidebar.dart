@@ -33,27 +33,48 @@ class GlassSidebar extends StatefulWidget {
   State<GlassSidebar> createState() => _GlassSidebarState();
 }
 
-class _GlassSidebarState extends State<GlassSidebar> {
+class _GlassSidebarState extends State<GlassSidebar> with SingleTickerProviderStateMixin {
   int _localIndex = 0;
-  bool _isHovered = false;
+  late final AnimationController _expandController;
+  late final Animation<double> _expandAnimation;
 
   int get _selectedIndex => widget.selectedIndex ?? _localIndex;
+
+  @override
+  void initState() {
+    super.initState();
+    _expandController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 190),
+      reverseDuration: const Duration(milliseconds: 170),
+    );
+    _expandAnimation = CurvedAnimation(
+      parent: _expandController,
+      curve: Curves.easeOutCubic,
+      reverseCurve: Curves.easeInCubic,
+    );
+  }
+
+  @override
+  void dispose() {
+    _expandController.dispose();
+    super.dispose();
+  }
 
   void _handleTap(int index) {
     if (widget.selectedIndex == null) {
       setState(() => _localIndex = index);
     }
     widget.onItemSelected?.call(index);
+    if (index == 0) {
+      widget.onHomeRoot?.call();
+    }
   }
 
   final List<_FloatingNavItem> _items = const [
     _FloatingNavItem(
       icon: Icons.home_rounded,
       label: 'Home',
-    ),
-    _FloatingNavItem(
-      icon: Icons.search_rounded,
-      label: 'Search',
     ),
     _FloatingNavItem(
       icon: Icons.settings_rounded,
@@ -63,110 +84,113 @@ class _GlassSidebarState extends State<GlassSidebar> {
 
   @override
   Widget build(BuildContext context) {
-    final double barWidth = _isHovered ? 180.0 : 56.0;
-    final borderRadius = BorderRadius.circular(_isHovered ? 20.0 : 28.0);
-
     return MouseRegion(
-      onEnter: (_) => setState(() => _isHovered = true),
-      onExit: (_) => setState(() => _isHovered = false),
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 250),
-        curve: const Cubic(0.2, 0.0, 0.0, 1.0),
-        width: barWidth,
-        margin: const EdgeInsets.fromLTRB(14, 18, 14, 18),
-        decoration: BoxDecoration(
-          borderRadius: borderRadius,
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: _isHovered ? 0.65 : 0.50),
-              blurRadius: _isHovered ? 30 : 22,
-              offset: const Offset(0, 8),
-              spreadRadius: _isHovered ? 1 : -2,
+      onEnter: (_) => _expandController.forward(),
+      onExit: (_) => _expandController.reverse(),
+      child: AnimatedBuilder(
+        animation: _expandAnimation,
+        builder: (context, child) {
+          final t = _expandAnimation.value;
+          final double barWidth = lerpDouble(56.0, 180.0, t)!;
+          final double radius = lerpDouble(28.0, 20.0, t)!;
+          final borderRadius = BorderRadius.circular(radius);
+
+          return Container(
+            width: barWidth,
+            margin: const EdgeInsets.fromLTRB(14, 18, 14, 18),
+            decoration: BoxDecoration(
+              borderRadius: borderRadius,
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: lerpDouble(0.50, 0.65, t)!),
+                  blurRadius: lerpDouble(22, 30, t)!,
+                  offset: const Offset(0, 8),
+                  spreadRadius: lerpDouble(-2, 1, t)!,
+                ),
+                if (t > 0.0)
+                  BoxShadow(
+                    color: ClaudeTheme.accent.withValues(alpha: 0.12 * t),
+                    blurRadius: 18 * t,
+                    spreadRadius: 0.5 * t,
+                  ),
+              ],
             ),
-            if (_isHovered)
-              BoxShadow(
-                color: ClaudeTheme.accent.withValues(alpha: 0.06),
-                blurRadius: 18,
-                spreadRadius: 0.5,
-              ),
-          ],
-        ),
-        child: ClipRRect(
-          borderRadius: borderRadius,
-          child: BackdropFilter(
-            filter: ImageFilter.blur(sigmaX: 28, sigmaY: 28),
-            child: AnimatedContainer(
-              duration: const Duration(milliseconds: 250),
-              curve: const Cubic(0.2, 0.0, 0.0, 1.0),
-              width: barWidth,
-              decoration: BoxDecoration(
-                gradient: const LinearGradient(
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                  colors: [
-                    Color(0xFF262421),
-                    Color(0xFF191816),
-                    Color(0xFF121110),
-                  ],
-                  stops: [0.0, 0.5, 1.0],
-                ),
-                borderRadius: borderRadius,
-                border: Border.all(
-                  color: const Color(0xFF3D3A34).withValues(alpha: _isHovered ? 0.90 : 0.70),
-                  width: 1.0,
-                ),
-              ),
-              child: Stack(
-                children: [
-                  // Specular top highlight
-                  Positioned(
-                    top: 0,
-                    left: 0,
-                    right: 0,
-                    height: 32,
-                    child: AnimatedContainer(
-                      duration: const Duration(milliseconds: 250),
-                      curve: const Cubic(0.2, 0.0, 0.0, 1.0),
-                      decoration: BoxDecoration(
-                        borderRadius: BorderRadius.vertical(
-                          top: Radius.circular(_isHovered ? 20.0 : 28.0),
+            child: ClipRRect(
+              borderRadius: borderRadius,
+              child: BackdropFilter(
+                filter: ImageFilter.blur(sigmaX: 28, sigmaY: 28),
+                child: Container(
+                  width: barWidth,
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
+                      colors: [
+                        ClaudeTheme.bgSurface,
+                        ClaudeTheme.bgSidebar,
+                        ClaudeTheme.bgCanvas,
+                      ],
+                      stops: const [0.0, 0.5, 1.0],
+                    ),
+                    borderRadius: borderRadius,
+                    border: Border.all(
+                      color: ClaudeTheme.borderHover.withValues(
+                        alpha: lerpDouble(0.60, 0.85, t)!,
+                      ),
+                      width: 1.0,
+                    ),
+                  ),
+                  child: Stack(
+                    children: [
+                      // Specular top highlight
+                      Positioned(
+                        top: 0,
+                        left: 0,
+                        right: 0,
+                        height: 32,
+                        child: Container(
+                          decoration: BoxDecoration(
+                            borderRadius: BorderRadius.vertical(
+                              top: Radius.circular(radius),
+                            ),
+                            gradient: LinearGradient(
+                              begin: Alignment.topCenter,
+                              end: Alignment.bottomCenter,
+                              colors: [
+                                Colors.white.withValues(alpha: 0.10),
+                                Colors.white.withValues(alpha: 0.0),
+                              ],
+                            ),
+                          ),
                         ),
-                        gradient: LinearGradient(
-                          begin: Alignment.topCenter,
-                          end: Alignment.bottomCenter,
-                          colors: [
-                            Colors.white.withValues(alpha: 0.12),
-                            Colors.white.withValues(alpha: 0.0),
+                      ),
+
+                      // Navigation Tabs Column
+                      Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 8),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            for (int i = 0; i < _items.length; i++) ...[
+                              _FloatingTabButton(
+                                item: _items[i],
+                                isSelected: _selectedIndex == i,
+                                expandProgress: t,
+                                onTap: () => _handleTap(i),
+                              ),
+                              if (i < _items.length - 1) const SizedBox(height: 3),
+                            ],
                           ],
                         ),
                       ),
-                    ),
+                    ],
                   ),
-
-                  // Navigation Tabs Column
-                  Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 8),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        for (int i = 0; i < _items.length; i++) ...[
-                          _FloatingTabButton(
-                            item: _items[i],
-                            isSelected: _selectedIndex == i,
-                            isExpanded: _isHovered,
-                            onTap: () => _handleTap(i),
-                          ),
-                          if (i < _items.length - 1) const SizedBox(height: 3),
-                        ],
-                      ],
-                    ),
-                  ),
-                ],
+                ),
               ),
             ),
-          ),
-        ),
+          );
+        },
       ),
     );
   }
@@ -175,13 +199,13 @@ class _GlassSidebarState extends State<GlassSidebar> {
 class _FloatingTabButton extends StatefulWidget {
   final _FloatingNavItem item;
   final bool isSelected;
-  final bool isExpanded;
+  final double expandProgress;
   final VoidCallback onTap;
 
   const _FloatingTabButton({
     required this.item,
     required this.isSelected,
-    required this.isExpanded,
+    required this.expandProgress,
     required this.onTap,
   });
 
@@ -195,18 +219,18 @@ class _FloatingTabButtonState extends State<_FloatingTabButton> {
   @override
   Widget build(BuildContext context) {
     final isSelected = widget.isSelected;
-    final isExpanded = widget.isExpanded;
+    final t = widget.expandProgress;
 
     final iconColor = isSelected
-        ? (isExpanded ? ClaudeTheme.accent : Colors.white)
-        : (_isButtonHovered ? const Color(0xFFECEBE6) : const Color(0xFF8E8B82));
+        ? ClaudeTheme.accent
+        : (_isButtonHovered ? ClaudeTheme.textPrimary : ClaudeTheme.textSecondary);
 
     final textColor = isSelected
-        ? Colors.white
-        : (_isButtonHovered ? const Color(0xFFECEBE6) : const Color(0xFFA8A59C));
+        ? ClaudeTheme.textPrimary
+        : (_isButtonHovered ? ClaudeTheme.textPrimary : ClaudeTheme.textSecondary);
 
     return Tooltip(
-      message: isExpanded ? '' : widget.item.label,
+      message: t > 0.5 ? '' : widget.item.label,
       waitDuration: const Duration(milliseconds: 300),
       child: MouseRegion(
         onEnter: (_) => setState(() => _isButtonHovered = true),
@@ -215,25 +239,8 @@ class _FloatingTabButtonState extends State<_FloatingTabButton> {
         child: GestureDetector(
           onTap: widget.onTap,
           behavior: HitTestBehavior.opaque,
-          child: AnimatedContainer(
-            duration: const Duration(milliseconds: 180),
-            curve: Curves.easeOutCubic,
+          child: SizedBox(
             height: 44,
-            margin: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
-            decoration: BoxDecoration(
-              color: isExpanded
-                  ? (isSelected
-                      ? ClaudeTheme.accent.withValues(alpha: 0.14)
-                      : (_isButtonHovered ? Colors.white.withValues(alpha: 0.05) : Colors.transparent))
-                  : Colors.transparent,
-              borderRadius: BorderRadius.circular(12),
-              border: isExpanded && isSelected
-                  ? Border.all(
-                      color: ClaudeTheme.accent.withValues(alpha: 0.32),
-                      width: 1.0,
-                    )
-                  : Border.all(color: Colors.transparent, width: 1.0),
-            ),
             child: ClipRect(
               child: OverflowBox(
                 alignment: Alignment.centerLeft,
@@ -244,9 +251,9 @@ class _FloatingTabButtonState extends State<_FloatingTabButton> {
                   children: [
                     Row(
                       children: [
-                        // Centered 46px Icon Anchor Container (Keeps icon exactly in place)
+                        // Centered Icon Anchor Container (Keeps icon exactly in geometric center of 56px capsule)
                         SizedBox(
-                          width: 46,
+                          width: 54,
                           height: 44,
                           child: Center(
                             child: Icon(
@@ -256,11 +263,9 @@ class _FloatingTabButtonState extends State<_FloatingTabButton> {
                             ),
                           ),
                         ),
-                        // Label text with fluid slide-fade
-                        AnimatedOpacity(
-                          duration: const Duration(milliseconds: 180),
-                          curve: Curves.easeOutCubic,
-                          opacity: isExpanded ? 1.0 : 0.0,
+                        // Label text with fluid slide-fade synchronized to controller
+                        Opacity(
+                          opacity: t.clamp(0.0, 1.0),
                           child: Text(
                             widget.item.label,
                             style: TextStyle(
@@ -277,12 +282,10 @@ class _FloatingTabButtonState extends State<_FloatingTabButton> {
                     // Active indicator dot centered beneath icon when collapsed
                     Positioned(
                       left: 0,
-                      width: 46,
+                      width: 54,
                       bottom: 3,
-                      child: AnimatedOpacity(
-                        duration: const Duration(milliseconds: 160),
-                        curve: Curves.easeOutCubic,
-                        opacity: (!isExpanded && isSelected) ? 1.0 : 0.0,
+                      child: Opacity(
+                        opacity: isSelected ? (1.0 - t).clamp(0.0, 1.0) : 0.0,
                         child: Center(
                           child: Container(
                             width: 4.5,

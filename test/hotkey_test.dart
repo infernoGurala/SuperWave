@@ -53,8 +53,8 @@ void main() {
     expect(find.text('Return to Parent Folder'), findsOneWidget);
 
     // Verify key badges display defaults
-    expect(find.text('CTRL'), findsOneWidget);
-    expect(find.text('SPACE'), findsOneWidget);
+    expect(find.text('CTRL'), findsNWidgets(2));
+    expect(find.text('SPACE'), findsNWidgets(3));
     expect(find.text('ALT'), findsOneWidget);
     expect(find.text('LEFT'), findsOneWidget);
 
